@@ -25,7 +25,7 @@ logger = logging.getLogger("lobster.bot")
 class TelegramBot:
     def __init__(self, db=None, llm=None, lobster_agent=None):
         self.token = os.environ["TELEGRAM_BOT_TOKEN"]
-        self.owner_id = int(os.environ["TELEGRAM_USER_ID"])
+        self.owner_id = int(os.environ.get("TELEGRAM_USER_ID") or os.environ["ALLOWED_USER_ID"])
         self.db = db
         self.llm = llm
         self.lobster = lobster_agent
