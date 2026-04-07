@@ -186,7 +186,11 @@ class TelegramBot:
         try:
             results = await self.lobster.searcher.search(topic, max_results=5)
             if not results:
-                await update.message.reply_text("No results found.")
+                await update.message.reply_text(
+                    f"No results found.\n"
+                    f"API key: {self.lobster.searcher.api_key[:12]}...\n"
+                    f"Try a different query?"
+                )
                 return
 
             # Show results

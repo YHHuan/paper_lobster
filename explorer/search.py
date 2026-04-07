@@ -41,6 +41,7 @@ class TavilySearch:
             return []
 
         try:
+            logger.info(f"Tavily search: query='{query}', key={self.api_key[:12]}...")
             resp = await self.client.post(
                 f"{TAVILY_API}/search",
                 json={
@@ -51,8 +52,12 @@ class TavilySearch:
                     "include_answer": include_answer,
                 },
             )
+            logger.info(f"Tavily response: status={resp.status_code}")
+            if resp.status_code >= 400:
+                logger.error(f"Tavily error response: {resp.text[:500]}")
             resp.raise_for_status()
             data = resp.json()
+            logger.info(f"Tavily response keys: {list(data.keys())}")
 
             results = []
             for r in data.get("results", []):
@@ -66,8 +71,11 @@ class TavilySearch:
             logger.info(f"Tavily search '{query[:50]}' → {len(results)} results")
             return results
 
+        except httpx.HTTPStatusError as e:
+            logger.error(f"Tavily HTTP error: {e.response.status_code} — {e.response.text[:300]}")
+            return []
         except Exception as e:
-            logger.error(f"Tavily search failed: {e}")
+            logger.error(f"Tavily search failed: {type(e).__name__}: {e}")
             return []
 
     async def close(self):
