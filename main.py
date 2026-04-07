@@ -75,6 +75,11 @@ async def post_init(application):
         threads_poster=threads_poster,
     )
 
+    # Wire up telegram bot with initialized services
+    telegram_bot.db = db
+    telegram_bot.llm = llm
+    telegram_bot.lobster = lobster
+
     # Store references
     application.bot_data["db"] = db
     application.bot_data["llm"] = llm
