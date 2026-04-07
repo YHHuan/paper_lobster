@@ -45,10 +45,15 @@ create table if not exists posts (
   created_at timestamp with time zone default now()
 );
 
--- Self-referencing FK for twin posts
-alter table posts add constraint fk_twin_post
-  foreign key (twin_post_id) references posts(id)
-  on delete set null;
+-- Self-referencing FK for twin posts (skip if already exists)
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'fk_twin_post') then
+    alter table posts add constraint fk_twin_post
+      foreign key (twin_post_id) references posts(id)
+      on delete set null;
+  end if;
+end $$;
 
 -- ===== 互動紀錄 =====
 create table if not exists interactions (
@@ -131,6 +136,23 @@ as $$
   order by similarity desc
   limit match_count;
 $$;
+
+-- ===== Identity State（動態記憶，龍蝦自己維護）=====
+create table if not exists identity_state (
+  key text primary key,
+  content text not null,
+  updated_at timestamp with time zone default now(),
+  updated_by text default 'lobster'
+);
+
+insert into identity_state (key, content) values
+  ('curiosity', '# 我最近在關注什麼
+
+（龍蝦還沒開始探索）'),
+  ('memory', '# 近期記憶
+
+（龍蝦還沒開始運作）')
+on conflict (key) do nothing;
 
 -- ===== 索引 =====
 create index if not exists idx_discoveries_explored_at on discoveries(explored_at desc);

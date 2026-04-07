@@ -85,7 +85,7 @@ class Lobster:
             return
 
         # 3. Evaluate with LLM
-        identity = load_identity()
+        identity = await load_identity(self.db)
         system = f"{identity}\n\n---\n\n{EXPLORE_PROMPT}"
 
         items_text = "\n\n".join(
@@ -152,7 +152,7 @@ class Lobster:
         # Spawn sub-lobster for deep research if score >= 8
         research = None
         if discovery.get("interest_score", 0) >= 8:
-            research = await spawn_research(self.llm, source_text, discovery.get("title", ""))
+            research = await spawn_research(self.llm, self.db, source_text, discovery.get("title", ""))
 
         # Select skill
         skill = await self._select_skill(discovery)
@@ -196,7 +196,7 @@ class Lobster:
         """
         # Build prompt
         voice_skill = "threads_voice" if platform == "threads" else None
-        identity = load_identity(include_skill=skill, platform=platform)
+        identity = await load_identity(self.db, include_skill=skill, platform=platform)
         length_guide = CREATE_POST_LENGTH.get(platform, CREATE_POST_LENGTH["x"])
         system = f"{identity}\n\n---\n\n{CREATE_POST_PROMPT.format(length_guide=length_guide)}"
 
@@ -343,7 +343,7 @@ class Lobster:
             ensure_ascii=False,
         )
 
-        identity = load_identity()
+        identity = await load_identity(self.db)
         from agent.prompts import REFLECT_PROMPT
         system = identity
         user_msg = REFLECT_PROMPT.format(today_summary=today_summary)
@@ -351,15 +351,17 @@ class Lobster:
         try:
             result = await self.llm.chat_json("lobster", system, user_msg)
 
-            # Update curiosity.md
+            # Update curiosity (write to DB, not filesystem)
             if result.get("curiosity_update"):
-                from utils.identity_loader import update_identity_file
-                update_identity_file("curiosity.md", result["curiosity_update"])
+                await self.db.update_identity_state(
+                    "curiosity", result["curiosity_update"], "lobster"
+                )
 
-            # Update memory.md
+            # Update memory (write to DB, not filesystem)
             if result.get("memory_update"):
-                from utils.identity_loader import update_identity_file
-                update_identity_file("memory.md", result["memory_update"])
+                await self.db.update_identity_state(
+                    "memory", result["memory_update"], "lobster"
+                )
 
             # Log insights
             insights = result.get("insights", [])

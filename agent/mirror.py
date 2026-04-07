@@ -28,7 +28,7 @@ class Mirror:
         weekly_data = await self._gather_weekly_data()
 
         # Run reflection
-        identity = load_identity()
+        identity = await load_identity(self.db)
         user_msg = MIRROR_PROMPT.format(weekly_data=json.dumps(weekly_data, ensure_ascii=False))
 
         try:

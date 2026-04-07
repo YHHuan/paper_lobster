@@ -35,18 +35,19 @@ Respond in JSON:
 }"""
 
 
-async def spawn_research(llm_client, source_text: str, title: str = "") -> dict:
+async def spawn_research(llm_client, db, source_text: str, title: str = "") -> dict:
     """Spawn a sub-lobster to do deep research on a source.
 
     Args:
         llm_client: LLMClient instance.
+        db: Database instance.
         source_text: Full text of the source to analyze.
         title: Optional title for context.
 
     Returns:
         Research findings dict.
     """
-    identity = load_identity()
+    identity = await load_identity(db)
     system = f"{identity}\n\n---\n\n{SPAWN_PROMPT}"
     user_msg = f"Title: {title}\n\nSource material:\n{source_text[:4000]}"
 

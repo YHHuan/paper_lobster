@@ -347,6 +347,27 @@ class Database:
             "diff_content": diff_content,
         })
 
+    # ── identity_state ──
+
+    async def get_identity_state(self, key: str) -> str:
+        """Read dynamic identity state (curiosity or memory) from DB."""
+        rows = await self._select("identity_state", {
+            "select": "content",
+            "key": f"eq.{key}",
+            "limit": "1",
+        })
+        if rows:
+            return rows[0].get("content", "")
+        return ""
+
+    async def update_identity_state(self, key: str, content: str, updated_by: str = "lobster"):
+        """Write dynamic identity state back to DB."""
+        await self._update("identity_state", {"key": key}, {
+            "content": content,
+            "updated_at": datetime.utcnow().isoformat(),
+            "updated_by": updated_by,
+        })
+
     # ── vector search ──
 
     async def match_discoveries(self, query_embedding: list[float], threshold: float = 0.65, count: int = 10) -> list[dict]:
