@@ -93,6 +93,9 @@ async def post_init(application):
     scheduler.start()
     application.bot_data["scheduler"] = scheduler
 
+    # Set Telegram menu commands
+    await telegram_bot.set_menu()
+
     logger.info("🦞 Lobster v2.5 initialized — all systems go")
     if telegram_bot:
         await telegram_bot.notify("🦞 Lobster v2.5 is online!")
