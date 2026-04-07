@@ -176,7 +176,11 @@ class TelegramBot:
         await update.message.reply_text(f"🔍 Exploring: {topic}...")
 
         if not self.lobster or not self.lobster.searcher:
-            await update.message.reply_text("❌ Search not available (searcher not initialized)")
+            await update.message.reply_text("❌ Searcher not initialized")
+            return
+
+        if not self.lobster.searcher.api_key:
+            await update.message.reply_text("❌ TAVILY_API_KEY not set in environment")
             return
 
         try:
