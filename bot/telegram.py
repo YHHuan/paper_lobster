@@ -185,7 +185,17 @@ class TelegramBot:
 
         try:
             results = await self.lobster.searcher.search(topic, max_results=5)
-            if not results:
+
+            # Also search academic sources
+            academic_results = []
+            if self.lobster.academic_search:
+                try:
+                    academic_results = await self.lobster.academic_search.search_all(topic, max_results=2)
+                except Exception as e:
+                    logger.warning(f"Academic search in /explore failed: {e}")
+
+            all_results = results + academic_results
+            if not all_results:
                 await update.message.reply_text(
                     f"No results found.\n"
                     f"API key: {self.lobster.searcher.api_key[:12]}...\n"
@@ -194,19 +204,20 @@ class TelegramBot:
                 return
 
             # Show results
-            msg_parts = [f"🔍 Found {len(results)} results for '{topic}':\n"]
-            for i, r in enumerate(results[:5], 1):
+            msg_parts = [f"🔍 Found {len(results)} web + {len(academic_results)} academic results for '{topic}':\n"]
+            for i, r in enumerate(all_results[:8], 1):
                 title = r.get("title", "No title")[:70]
                 url = r.get("url", "")
+                source = r.get("source", "web")
                 snippet = r.get("content", "")[:120]
-                msg_parts.append(f"{i}. {title}\n   {url}\n   {snippet}...\n")
+                msg_parts.append(f"{i}. [{source}] {title}\n   {url}\n   {snippet}...\n")
 
             await update.message.reply_text("\n".join(msg_parts))
 
             # Also store high-quality results as discoveries
             if self.db:
                 stored = 0
-                for r in results:
+                for r in all_results:
                     if r.get("score", 0) > 0.5:
                         await self.db.insert_discovery(
                             source_type="manual_search",

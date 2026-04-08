@@ -30,6 +30,10 @@ async def post_init(application):
     from explorer.rss import RSSReader
     from explorer.reader import JinaReader
     from explorer.x_listener import XListener
+    from explorer.academic import AcademicSearch
+    from explorer.browser import HeadlessBrowser
+    from explorer.pdf_reader import PDFReader
+    from agent.evolution import EvolutionEngine
     from publisher.threads_poster import ThreadsPoster
     from publisher.engagement_tracker import EngagementTracker
     from agent.lobster import Lobster
@@ -46,12 +50,18 @@ async def post_init(application):
     rss_reader = RSSReader(db)
     jina_reader = JinaReader()
     x_listener = XListener()
+    academic_search = AcademicSearch()
+    browser = HeadlessBrowser()
+    pdf_reader = PDFReader()
 
     # Initialize publishers
     threads_poster = ThreadsPoster()
 
     # Get telegram bot reference
     telegram_bot = application.bot_data.get("telegram_bot")
+
+    # Initialize evolution engine
+    evolution = EvolutionEngine(db=db, telegram=telegram_bot)
 
     # Build main lobster agent
     lobster = Lobster(
@@ -63,6 +73,10 @@ async def post_init(application):
         rss_reader=rss_reader,
         jina_reader=jina_reader,
         x_listener=x_listener,
+        academic_search=academic_search,
+        browser=browser,
+        pdf_reader=pdf_reader,
+        evolution=evolution,
     )
 
     # Build mirror agent
