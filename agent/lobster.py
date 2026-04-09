@@ -622,6 +622,102 @@ class Lobster:
                 "strange but true scientific finding",
             ]
 
+    async def binge_explore(self, rounds: int = 15) -> dict:
+        """Run multiple exploration rounds in a row — use after a big identity update.
+
+        Alternates morning/evening modes so queries cover both hard-science
+        and cross-domain/humanities angles. Ends with a reflect so everything
+        learned is written into curiosity + memory.
+
+        Args:
+            rounds: Number of explore() calls to run (default 15, max 20).
+
+        Returns:
+            Summary dict with total rounds completed and discoveries stored.
+        """
+        rounds = min(rounds, 20)
+        logger.info(f"Binge explore starting: {rounds} rounds")
+
+        completed = 0
+        errors = 0
+
+        for i in range(rounds):
+            mode = "morning" if i % 2 == 0 else "evening"
+            try:
+                await self.explore(mode)
+                completed += 1
+
+                # Progress ping every 5 rounds
+                if self.telegram and completed % 5 == 0:
+                    await self.telegram.notify(
+                        f"🔄 Binge explore: {completed}/{rounds} rounds done"
+                    )
+
+                # Small pause so we don't hammer APIs
+                import asyncio
+                await asyncio.sleep(3)
+
+            except Exception as e:
+                errors += 1
+                logger.error(f"Binge round {i+1} failed: {e}")
+
+        # Final reflect to digest everything
+        try:
+            await self.reflect()
+        except Exception as e:
+            logger.warning(f"Post-binge reflect failed: {e}")
+
+        summary = {"completed": completed, "errors": errors, "rounds": rounds}
+        logger.info(f"Binge explore done: {summary}")
+        return summary
+
+    async def sync_identity(self) -> dict:
+        """Re-read soul.md + style.md and update curiosity/memory to reflect new identity.
+
+        Call this after human edits to soul.md or style.md so the lobster
+        internalises the changes without waiting for the nightly reflect.
+        """
+        logger.info("Syncing identity from updated soul.md + style.md")
+
+        identity = await load_identity(self.db)
+
+        system = identity
+        user_msg = (
+            "你的 soul.md 和 style.md 剛剛被人類更新了。\n"
+            "請仔細閱讀上方的完整 identity，然後：\n\n"
+            "1. 更新 curiosity — 根據新的 soul，你現在對哪些主題最好奇？"
+            "哪些舊的好奇心該調整或淡出？\n"
+            "2. 更新 memory — 記下這次 identity 更新的核心變化，"
+            "讓未來的你知道有什麼改變了。\n\n"
+            "Respond in JSON:\n"
+            '{\n'
+            '  "curiosity_update": "完整的新 curiosity 內容（繁體中文，200-400字）",\n'
+            '  "memory_update": "完整的新 memory 內容（繁體中文，150-300字）",\n'
+            '  "insights": ["從這次 identity 更新學到的 1-3 件事"]\n'
+            '}'
+        )
+
+        try:
+            result = await self.llm.chat_json("lobster", system, user_msg)
+
+            if result.get("curiosity_update"):
+                await self.db.update_identity_state(
+                    "curiosity", result["curiosity_update"], "sync_identity"
+                )
+
+            if result.get("memory_update"):
+                await self.db.update_identity_state(
+                    "memory", result["memory_update"], "sync_identity"
+                )
+
+            insights = result.get("insights", [])
+            logger.info(f"Identity synced. Insights: {insights}")
+            return {"ok": True, "insights": insights}
+
+        except Exception as e:
+            logger.error(f"sync_identity failed: {e}")
+            return {"ok": False, "error": str(e)}
+
     async def _deep_read_url(self, url: str) -> str:
         """Read URL content with best available method: PDF → Browser → Jina."""
         # PDF detection

@@ -32,6 +32,8 @@ MENU_COMMANDS = [
     BotCommand("resume", "Resume auto-posting"),
     BotCommand("rate", "Rate a post (1-5)"),
     BotCommand("post", "Trigger a post now"),
+    BotCommand("relearn", "Re-ingest updated soul/style identity"),
+    BotCommand("binge", "Run N explore rounds (default 15, max 20)"),
     BotCommand("enable_proactive", "Enable proactive engagement"),
 ]
 
@@ -60,6 +62,8 @@ class TelegramBot:
         self.app.add_handler(CommandHandler("explore", self._cmd_explore))
         self.app.add_handler(CommandHandler("track", self._cmd_track))
         self.app.add_handler(CommandHandler("post", self._cmd_post))
+        self.app.add_handler(CommandHandler("relearn", self._cmd_relearn))
+        self.app.add_handler(CommandHandler("binge", self._cmd_binge))
         self.app.add_handler(CommandHandler("enable_proactive", self._cmd_enable_proactive))
 
         # URL and text messages
@@ -98,6 +102,8 @@ class TelegramBot:
             "📊 /stats — 本月統計 & 預算\n"
             "🔍 /explore <topic> — 立刻搜尋\n"
             "📝 /post — 立刻觸發一次發文\n"
+            "🧠 /relearn — 重新內化 soul/style 更新\n"
+            "🍽 /binge [n] — 狂探索 n 輪（預設15，最多20）\n"
             "👁 /track <handle> — 追蹤 X 帳號\n"
             "⭐ /rate <id> <1-5> <評語> — 評價推文\n"
             "⏸ /pause — 暫停自動發布\n"
@@ -248,6 +254,64 @@ class TelegramBot:
         except Exception as e:
             logger.error(f"Manual post failed: {e}", exc_info=True)
             await update.message.reply_text(f"❌ Post creation failed: {e}")
+
+    async def _cmd_binge(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Run multiple exploration rounds in a row."""
+        if not self.lobster:
+            await update.message.reply_text("❌ Lobster agent not initialized")
+            return
+
+        rounds = 15
+        if context.args:
+            try:
+                rounds = max(1, min(20, int(context.args[0])))
+            except ValueError:
+                await update.message.reply_text("Usage: /binge [rounds] (1-20, default 15)")
+                return
+
+        await update.message.reply_text(
+            f"🍽 Binge exploring: {rounds} rounds\n"
+            f"交替跑 morning/evening 模式，最後 reflect 消化。\n"
+            f"每 5 輪會回報進度，完成後通知你。"
+        )
+
+        import asyncio
+
+        async def run_binge():
+            try:
+                result = await self.lobster.binge_explore(rounds)
+                msg = (
+                    f"✅ Binge done!\n"
+                    f"完成: {result['completed']}/{result['rounds']} 輪\n"
+                    f"錯誤: {result['errors']} 輪\n"
+                    f"已跑完 reflect，curiosity + memory 更新完畢。"
+                )
+                await self.notify(msg)
+            except Exception as e:
+                logger.error(f"Binge explore failed: {e}", exc_info=True)
+                await self.notify(f"❌ Binge failed: {e}")
+
+        asyncio.create_task(run_binge())
+
+    async def _cmd_relearn(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Re-ingest soul.md + style.md and update curiosity/memory."""
+        if not self.lobster:
+            await update.message.reply_text("❌ Lobster agent not initialized")
+            return
+
+        await update.message.reply_text("🧠 Syncing identity from updated soul.md + style.md...")
+        try:
+            result = await self.lobster.sync_identity()
+            if result.get("ok"):
+                insights = result.get("insights", [])
+                msg = "✅ Identity synced!\n\nInsights:\n"
+                msg += "\n".join(f"• {i}" for i in insights) if insights else "（無新洞察）"
+                await update.message.reply_text(msg)
+            else:
+                await update.message.reply_text(f"❌ Sync failed: {result.get('error', 'unknown error')}")
+        except Exception as e:
+            logger.error(f"/relearn failed: {e}", exc_info=True)
+            await update.message.reply_text(f"❌ Failed: {e}")
 
     async def _cmd_track(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not context.args:
