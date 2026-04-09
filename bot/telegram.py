@@ -372,8 +372,32 @@ class TelegramBot:
                 await update.message.reply_text("❌ Reader not initialized")
             return
 
-        # Store as thought
-        if self.db:
+        # Natural language chat — respond with LLM
+        if self.llm and self.lobster:
+            try:
+                from utils.identity_loader import load_identity
+                identity = await load_identity(self.db)
+                system = (
+                    f"{identity}\n\n"
+                    "你現在在跟你的主人用 Telegram 聊天。\n"
+                    "用繁體中文回覆，語氣自然口語，保持你的個性風格。\n"
+                    "回覆簡短（100字以內），不用正式開場白或結尾。"
+                )
+                reply = await self.llm.chat("lobster", system, text, max_tokens=300)
+                await update.message.reply_text(reply.strip())
+            except Exception as e:
+                logger.error(f"Chat reply failed: {e}")
+                # Fallback: store as thought
+                if self.db:
+                    await self.db.insert_discovery(
+                        source_type="thought",
+                        title=text[:80],
+                        summary=text,
+                        content_type="thought",
+                        interest_score=5,
+                    )
+                    await update.message.reply_text("💭 Stored as thought.")
+        elif self.db:
             await self.db.insert_discovery(
                 source_type="thought",
                 title=text[:80],

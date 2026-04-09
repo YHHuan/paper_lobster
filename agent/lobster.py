@@ -449,6 +449,7 @@ class Lobster:
         system = identity
         user_msg = REFLECT_PROMPT.format(today_summary=today_summary)
 
+        insights = []
         try:
             result = await self.llm.chat_json("lobster", system, user_msg)
 
@@ -464,21 +465,9 @@ class Lobster:
                     "memory", result["memory_update"], "lobster"
                 )
 
-            # Log insights
             insights = result.get("insights", [])
             if insights:
                 logger.info(f"Reflection insights: {insights}")
-
-            # Log token usage
-            cost_data = self.llm.get_cost_breakdown()
-            total = cost_data.get("_total", {})
-            await self.db.log_token_usage(
-                heartbeat_type="reflect",
-                input_tokens=total.get("tokens", 0),
-                output_tokens=0,
-                cost_usd=total.get("cost_usd", 0),
-                model="claude-sonnet-4-5-20250514",
-            )
 
             # Auto-evolve: update skill preferences based on engagement
             if self.evolution:
@@ -495,8 +484,33 @@ class Lobster:
                 except Exception as e:
                     logger.warning(f"Evolution step in reflect failed: {e}")
 
-            # Daily summary to Telegram
-            if self.telegram:
+        except Exception as e:
+            logger.error(f"Reflection failed: {e}")
+
+        # Always log token usage — even if reflection itself errored
+        try:
+            cost_data = self.llm.get_cost_breakdown()
+            total = cost_data.get("_total", {})
+            cost_usd = total.get("cost_usd", 0)
+            tokens = total.get("tokens", 0)
+            if tokens > 0:
+                await self.db.log_token_usage(
+                    heartbeat_type="reflect",
+                    input_tokens=tokens,
+                    output_tokens=0,
+                    cost_usd=cost_usd,
+                    model="anthropic/claude-sonnet-4-5",
+                )
+                self.llm.reset_cost_tracking()
+                logger.info(f"Token usage logged: {tokens} tokens, ${cost_usd:.4f}")
+            else:
+                logger.warning("Token usage is 0 — OpenRouter may not be returning usage data")
+        except Exception as e:
+            logger.error(f"Token logging failed: {e}")
+
+        # Daily summary to Telegram
+        if self.telegram:
+            try:
                 from utils.token_tracker import TokenTracker
                 tracker = TokenTracker(self.db)
                 budget = await tracker.get_budget_status()
@@ -509,9 +523,8 @@ class Lobster:
                 if insights:
                     msg += f"Learned: {'; '.join(insights[:3])}"
                 await self.telegram.notify(msg)
-
-        except Exception as e:
-            logger.error(f"Reflection failed: {e}")
+            except Exception as e:
+                logger.warning(f"Reflect Telegram summary failed: {e}")
 
     async def _select_skill(self, discovery: dict) -> str:
         """Use LLM to pick the best skill for a discovery, informed by engagement history."""
@@ -660,6 +673,21 @@ class Lobster:
             except Exception as e:
                 errors += 1
                 logger.error(f"Binge round {i+1} failed: {e}")
+
+        # Log token usage for all binge exploration rounds
+        try:
+            cost_data = self.llm.get_cost_breakdown()
+            total = cost_data.get("_total", {})
+            await self.db.log_token_usage(
+                heartbeat_type="binge_explore",
+                input_tokens=total.get("tokens", 0),
+                output_tokens=0,
+                cost_usd=total.get("cost_usd", 0),
+                model="anthropic/claude-sonnet-4-5",
+            )
+            self.llm.reset_cost_tracking()
+        except Exception as e:
+            logger.warning(f"Binge token logging failed: {e}")
 
         # Final reflect to digest everything
         try:
