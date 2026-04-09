@@ -34,6 +34,7 @@ MENU_COMMANDS = [
     BotCommand("post", "Trigger a post now"),
     BotCommand("relearn", "Re-ingest updated soul/style identity"),
     BotCommand("binge", "Run N explore rounds (default 15, max 20)"),
+    BotCommand("model", "Show or switch active LLM model"),
     BotCommand("enable_proactive", "Enable proactive engagement"),
 ]
 
@@ -64,6 +65,7 @@ class TelegramBot:
         self.app.add_handler(CommandHandler("post", self._cmd_post))
         self.app.add_handler(CommandHandler("relearn", self._cmd_relearn))
         self.app.add_handler(CommandHandler("binge", self._cmd_binge))
+        self.app.add_handler(CommandHandler("model", self._cmd_model))
         self.app.add_handler(CommandHandler("enable_proactive", self._cmd_enable_proactive))
 
         # URL and text messages
@@ -104,6 +106,7 @@ class TelegramBot:
             "📝 /post — 立刻觸發一次發文\n"
             "🧠 /relearn — 重新內化 soul/style 更新\n"
             "🍽 /binge [n] — 狂探索 n 輪（預設15，最多20）\n"
+            "🤖 /model [name] — 查看或切換 LLM 模型\n"
             "👁 /track <handle> — 追蹤 X 帳號\n"
             "⭐ /rate <id> <1-5> <評語> — 評價推文\n"
             "⏸ /pause — 暫停自動發布\n"
@@ -254,6 +257,41 @@ class TelegramBot:
         except Exception as e:
             logger.error(f"Manual post failed: {e}", exc_info=True)
             await update.message.reply_text(f"❌ Post creation failed: {e}")
+
+    async def _cmd_model(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show available models or switch active model."""
+        if not self.llm:
+            await update.message.reply_text("❌ LLM not initialized")
+            return
+
+        from llm.client import AVAILABLE_MODELS
+
+        # No args → show current + list
+        if not context.args:
+            info = self.llm.get_model_info()
+            lines = [f"🤖 Current: {info['name']} ({info['model_id']})\n"]
+            lines.append("Available:")
+            for m in self.llm.list_models():
+                marker = "▶" if m["name"] == info["name"] else " "
+                lines.append(f"{marker} {m['name']} — {m['model_id']} [{m['provider']}]")
+            lines.append("\nUsage: /model <name>")
+            await update.message.reply_text("\n".join(lines))
+            return
+
+        name = context.args[0].lower()
+        if self.llm.set_active_model(name):
+            await self.llm.save_active_model_to_db()
+            info = self.llm.get_model_info()
+            await update.message.reply_text(
+                f"✅ Switched to: {info['name']}\n"
+                f"Model: {info['model_id']}\n"
+                f"Provider: {info['provider']}"
+            )
+        else:
+            names = ", ".join(AVAILABLE_MODELS.keys())
+            await update.message.reply_text(
+                f"❌ Unknown model: {name}\nAvailable: {names}"
+            )
 
     async def _cmd_binge(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Run multiple exploration rounds in a row."""

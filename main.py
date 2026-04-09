@@ -44,6 +44,8 @@ async def post_init(application):
     db = Database()
     await db.connect()
     llm = LLMClient()
+    llm.inject_db(db)
+    await llm.load_active_model_from_db()
 
     # Initialize explorers
     searcher = TavilySearch()
