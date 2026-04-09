@@ -24,17 +24,18 @@ logger = logging.getLogger("lobster.bot")
 
 # Menu commands shown in Telegram
 MENU_COMMANDS = [
-    BotCommand("start", "Show all commands"),
-    BotCommand("stats", "Monthly statistics & budget"),
-    BotCommand("explore", "Search a topic now"),
-    BotCommand("track", "Track an X account"),
-    BotCommand("pause", "Pause auto-posting"),
-    BotCommand("resume", "Resume auto-posting"),
-    BotCommand("rate", "Rate a post (1-5)"),
-    BotCommand("post", "Trigger a post now"),
-    BotCommand("relearn", "Re-ingest updated soul/style identity"),
-    BotCommand("binge", "Run N explore rounds (default 15, max 20)"),
-    BotCommand("model", "Show or switch active LLM model"),
+    BotCommand("start",            "Show all commands"),
+    BotCommand("stats",            "Monthly statistics & budget"),
+    BotCommand("post",             "Trigger a post now"),
+    BotCommand("explore",          "Search a topic now"),
+    BotCommand("binge",            "Binge explore N rounds (default 15, max 20)"),
+    BotCommand("relearn",          "Re-ingest updated soul/style identity"),
+    BotCommand("model",            "Show or switch active LLM model"),
+    BotCommand("track",            "Track an X account"),
+    BotCommand("rate",             "Rate a post: /rate <id> <1-5> [comment]"),
+    BotCommand("delete",           "Delete a post: /delete <id>"),
+    BotCommand("pause",            "Pause auto-posting"),
+    BotCommand("resume",           "Resume auto-posting"),
     BotCommand("enable_proactive", "Enable proactive engagement"),
 ]
 
@@ -101,20 +102,25 @@ class TelegramBot:
     async def _cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "🦞 Lobster v2.5\n\n"
-            "📊 /stats — 本月統計 & 預算\n"
-            "🔍 /explore <topic> — 立刻搜尋\n"
+            "── 內容 ──\n"
             "📝 /post — 立刻觸發一次發文\n"
-            "🧠 /relearn — 重新內化 soul/style 更新\n"
+            "🔍 /explore <topic> — 立刻搜尋某主題\n"
             "🍽 /binge [n] — 狂探索 n 輪（預設15，最多20）\n"
+            "\n── 身份 ──\n"
+            "🧠 /relearn — 重新內化 soul/style 更新\n"
             "🤖 /model [name] — 查看或切換 LLM 模型\n"
+            "   可選: sonnet / gemini-2.5 / gemini-3 / gemini-3.1 / local\n"
+            "\n── 數據 ──\n"
+            "📊 /stats — 本月統計 & token 預算\n"
             "👁 /track <handle> — 追蹤 X 帳號\n"
-            "⭐ /rate <id> <1-5> <評語> — 評價推文\n"
-            "⏸ /pause — 暫停自動發布\n"
-            "▶️ /resume — 恢復\n"
+            "⭐ /rate <id> <1-5> [評語] — 評價推文\n"
             "🗑 /delete <id> — 刪除推文\n"
+            "\n── 控制 ──\n"
+            "⏸ /pause — 暫停自動發布\n"
+            "▶️ /resume — 恢復自動發布\n"
             "💬 /enable_proactive — 開啟主動互動\n"
-            "\n📎 貼 URL → 立即處理\n"
-            "💭 打字 → 存為 thought 素材"
+            "\n📎 貼 URL → 立即讀取並存為素材\n"
+            "💭 打字 → 跟龍蝦聊天"
         )
 
     async def _cmd_stats(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
