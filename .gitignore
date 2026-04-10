@@ -7,3 +7,9 @@ venv/
 dist/
 build/
 .DS_Store
+
+# Claude Code local state
+.claude/
+
+# Local knowledge state (rebuilt at runtime, can grow large)
+data/knowledge_state.json

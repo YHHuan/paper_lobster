@@ -1,0 +1,14 @@
+{
+  "type": "preprint",
+  "fields": [
+    "population",
+    "intervention",
+    "comparison",
+    "outcome",
+    "method_quality",
+    "preprint_maturity",
+    "replication_status",
+    "salmon_relevance",
+    "one_liner"
+  ]
+}

@@ -1,19 +1,16 @@
-"""Lobster v2.5 — Entry point.
+"""Lobster v3.0 — Entry point.
 
 Starts the Telegram bot with webhook (Railway) or polling (local),
-initializes all components, and registers heartbeat schedule.
+initializes all v2.5 components + v3 brain / digester / forage / evolve.
 """
 
 import os
-import sys
 import logging
-import asyncio
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
@@ -24,7 +21,7 @@ logger = logging.getLogger("lobster")
 
 async def post_init(application):
     """Initialize all components after bot starts."""
-    from llm.client import LLMClient
+    from llm.router import LLMRouter
     from db.client import Database
     from explorer.search import TavilySearch
     from explorer.rss import RSSReader
@@ -33,21 +30,31 @@ async def post_init(application):
     from explorer.academic import AcademicSearch
     from explorer.browser import HeadlessBrowser
     from explorer.pdf_reader import PDFReader
+    from explorer.forage import Forager
     from agent.evolution import EvolutionEngine
-    from publisher.threads_poster import ThreadsPoster
-    from publisher.engagement_tracker import EngagementTracker
+    from agent.evolve import Evolver
     from agent.lobster import Lobster
     from agent.mirror import Mirror
+    from brain.knowledge_state import KnowledgeState
+    from brain.reflect import Reflector
+    from brain.hypothesize import Hypothesizer
+    from brain.curiosity_loop import CuriosityLoop
+    from digester.extract import Extractor
+    from digester.connect import Connector
+    from digester.synthesize import Synthesizer
+    from publisher.threads_poster import ThreadsPoster
+    from publisher.engagement_tracker import EngagementTracker
     from scheduler.heartbeat import setup_heartbeats
 
-    # Initialize core services
+    # ── Core services ──
     db = Database()
     await db.connect()
-    llm = LLMClient()
+
+    llm = LLMRouter()
     llm.inject_db(db)
     await llm.load_active_model_from_db()
 
-    # Initialize explorers
+    # ── v2.5 explorers ──
     searcher = TavilySearch()
     rss_reader = RSSReader(db)
     jina_reader = JinaReader()
@@ -56,16 +63,16 @@ async def post_init(application):
     browser = HeadlessBrowser()
     pdf_reader = PDFReader()
 
-    # Initialize publishers
+    # ── v2.5 publishers ──
     threads_poster = ThreadsPoster()
 
-    # Get telegram bot reference
+    # ── Telegram bot ref ──
     telegram_bot = application.bot_data.get("telegram_bot")
 
-    # Initialize evolution engine
+    # ── v2.5 Evolution engine (pre-existing) ──
     evolution = EvolutionEngine(db=db, telegram=telegram_bot)
 
-    # Build main lobster agent
+    # ── v2.5 Lobster agent (posting / engagement — still the social brain) ──
     lobster = Lobster(
         llm=llm,
         db=db,
@@ -81,44 +88,79 @@ async def post_init(application):
         evolution=evolution,
     )
 
-    # Build mirror agent
-    mirror = Mirror(llm=llm, db=db, telegram=telegram_bot)
+    # ── v3 Brain modules ──
+    ks_path = os.environ.get("KNOWLEDGE_STATE_PATH")
+    knowledge = KnowledgeState(db, json_path=ks_path)
+    reflector = Reflector(llm, db, knowledge)
+    hypothesizer = Hypothesizer(llm, db)
+    forager = Forager(llm=llm, db=db)
+    extractor = Extractor(llm, db)
+    connector = Connector(llm, db)
+    synthesizer = Synthesizer(llm, db)
 
-    # Build engagement tracker
+    curiosity_loop = CuriosityLoop(
+        llm=llm,
+        db=db,
+        knowledge=knowledge,
+        reflector=reflector,
+        hypothesizer=hypothesizer,
+        forager=forager,
+        extractor=extractor,
+        connector=connector,
+        synthesizer=synthesizer,
+        telegram=telegram_bot,
+    )
+
+    evolver = Evolver(llm=llm, db=db, telegram=telegram_bot)
+    mirror = Mirror(llm=llm, db=db, telegram=telegram_bot, evolver=evolver)
+
+    # ── Engagement tracker ──
     engagement_tracker = EngagementTracker(
         db=db,
         x_listener=x_listener,
         threads_poster=threads_poster,
     )
 
-    # Wire up telegram bot with initialized services
+    # ── Wire telegram bot with all services ──
     telegram_bot.db = db
     telegram_bot.llm = llm
     telegram_bot.lobster = lobster
+    telegram_bot.loop = curiosity_loop
+    telegram_bot.evolver = evolver
 
-    # Store references
-    application.bot_data["db"] = db
-    application.bot_data["llm"] = llm
-    application.bot_data["lobster"] = lobster
-    application.bot_data["mirror"] = mirror
+    # ── Store references ──
+    application.bot_data.update({
+        "db": db,
+        "llm": llm,
+        "lobster": lobster,
+        "mirror": mirror,
+        "curiosity_loop": curiosity_loop,
+        "evolver": evolver,
+        "forager": forager,
+    })
 
-    # Setup heartbeat scheduler
+    # ── Scheduler ──
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
     scheduler = AsyncIOScheduler(timezone=os.environ.get("TZ", "Asia/Taipei"))
-    setup_heartbeats(scheduler, lobster, mirror, engagement_tracker)
+    setup_heartbeats(
+        scheduler,
+        lobster,
+        mirror=mirror,
+        evolver=evolver,
+        engagement_tracker=engagement_tracker,
+        curiosity_loop=curiosity_loop,
+    )
     scheduler.start()
     application.bot_data["scheduler"] = scheduler
 
-    # Set Telegram menu commands
     await telegram_bot.set_menu()
 
-    logger.info("🦞 Lobster v2.5 initialized — all systems go")
+    logger.info("🦞 Lobster v3.0 initialized — curiosity loop + social brain ready")
     if telegram_bot:
-        await telegram_bot.notify("🦞 Lobster v2.5 is online!")
+        await telegram_bot.notify("🦞 Lobster v3.0 is online!")
 
 
 async def post_shutdown(application):
-    """Cleanup on shutdown."""
     db = application.bot_data.get("db")
     if db:
         await db.close()
@@ -127,11 +169,19 @@ async def post_shutdown(application):
     if llm:
         await llm.close()
 
+    forager = application.bot_data.get("forager")
+    if forager:
+        await forager.close()
+
+    loop = application.bot_data.get("curiosity_loop")
+    if loop:
+        await loop.stop()
+
     scheduler = application.bot_data.get("scheduler")
     if scheduler:
         scheduler.shutdown(wait=False)
 
-    logger.info("Lobster v2.5 shut down")
+    logger.info("Lobster v3.0 shut down")
 
 
 def main():
@@ -141,7 +191,6 @@ def main():
     app = telegram_bot.build_app()
     app.bot_data["telegram_bot"] = telegram_bot
 
-    # Wire up telegram bot's db/llm refs (will be set in post_init)
     app.post_init = post_init
     app.post_shutdown = post_shutdown
 

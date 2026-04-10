@@ -1,0 +1,13 @@
+{
+  "type": "clinical_research",
+  "fields": [
+    "population",
+    "intervention",
+    "comparison",
+    "outcome",
+    "method_quality",
+    "clinical_utility",
+    "salmon_relevance",
+    "one_liner"
+  ]
+}

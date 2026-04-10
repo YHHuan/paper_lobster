@@ -1,0 +1,12 @@
+{
+  "type": "social_signal",
+  "fields": [
+    "claim",
+    "source_linked",
+    "engagement_level",
+    "expert_endorsement",
+    "novelty_vs_hype",
+    "salmon_relevance",
+    "one_liner"
+  ]
+}
