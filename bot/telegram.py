@@ -434,19 +434,48 @@ class TelegramBot:
         await update.message.reply_text("▶️ Resumed. /inject 任何問題或等下次 seed。")
 
     async def _cmd_rate(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Two usages:
+          1. /rate <id> <1-5> [comment]
+          2. Reply to an insight notification + /rate <1-5> [comment]
+             — id is parsed from the replied message's text.
+        """
         args = context.args
-        if not args or len(args) < 2:
-            await update.message.reply_text("Usage: /rate <id> <1-5> [comment]")
+        target_id = None
+        rating_idx = 0  # index in args where rating starts
+
+        # Check reply-based usage first
+        rtm = update.message.reply_to_message
+        if rtm and rtm.text:
+            m = re.search(r"\bins_[0-9_a-zA-Z]+", rtm.text)
+            if m:
+                target_id = m.group(0)
+                rating_idx = 0  # /rate <1-5> [comment]
+
+        # Fall back to old /rate <id> <1-5> [comment] syntax
+        if not target_id:
+            if not args or len(args) < 2:
+                await update.message.reply_text(
+                    "Usage:\n"
+                    "  /rate <id> <1-5> [comment]\n"
+                    "或回覆一則 insight 通知 + /rate <1-5> [comment]"
+                )
+                return
+            target_id = args[0]
+            rating_idx = 1
+
+        if len(args) <= rating_idx:
+            await update.message.reply_text("Need a rating 1-5")
             return
-        target_id = args[0]
+
         try:
-            rating = int(args[1])
+            rating = int(args[rating_idx])
             assert 1 <= rating <= 5
         except (ValueError, AssertionError):
             await update.message.reply_text("Rating must be 1-5")
             return
-        comment = " ".join(args[2:]) if len(args) > 2 else None
-        # Try insight first (id starts with ins_), else post
+
+        comment = " ".join(args[rating_idx + 1:]) if len(args) > rating_idx + 1 else None
+
         try:
             if target_id.startswith("ins_"):
                 await self.db.rate_insight(target_id, rating, comment)
@@ -539,8 +568,9 @@ class TelegramBot:
             await update.message.reply_text(f"❌ Unknown model: {name}")
 
     async def _cmd_binge(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not self.lobster:
-            await update.message.reply_text("❌ Lobster agent not initialized")
+        """v3: drain N curiosity loop rounds back-to-back."""
+        if not self.loop:
+            await update.message.reply_text("❌ curiosity loop not initialized")
             return
         rounds = 15
         if context.args:
@@ -549,18 +579,24 @@ class TelegramBot:
             except ValueError:
                 await update.message.reply_text("Usage: /binge [rounds] (1-20, default 15)")
                 return
-        await update.message.reply_text(f"🍽 Binge exploring: {rounds} rounds")
+        await update.message.reply_text(
+            f"🍽 Binge: 跑 {rounds} 輪 curiosity loop\n"
+            f"先 reflect+hypothesize 補滿問題池，然後 drain。背景跑，完成會通知。"
+        )
 
         import asyncio
 
         async def run_binge():
             try:
-                result = await self.lobster.binge_explore(rounds)
+                result = await self.loop.binge(rounds)
                 await self.notify(
-                    f"✅ Binge done!\n完成: {result['completed']}/{result['rounds']} 輪"
+                    f"✅ Binge done!\n"
+                    f"完成: {result['completed']}/{result['rounds']} 輪\n"
+                    f"錯誤: {result.get('errors', 0)}"
                 )
             except Exception as e:
-                await self.notify(f"❌ Binge failed: {e}")
+                logger.exception("binge failed")
+                await self.notify(f"❌ Binge failed: {type(e).__name__}: {e}")
 
         asyncio.create_task(run_binge())
 
@@ -621,7 +657,7 @@ class TelegramBot:
                 await update.message.reply_text(f"❌ URL inject error: {e}")
             return
 
-        # Natural language chat — with conversation memory + reply context + anti-hallucination
+        # Natural language chat — with conversation memory + reply context + DB-grounded recall
         if self.llm and self.lobster:
             try:
                 from utils.identity_loader import load_identity
@@ -630,9 +666,42 @@ class TelegramBot:
                 # Pull per-user sliding-window history (last 6 turns = 12 messages)
                 history = context.user_data.setdefault("chat_history", [])
 
+                # Pull the lobster's RECENT MEMORY from DB so it can ground replies
+                # in real foraged content instead of hallucinating URLs/titles.
+                # This is the load-bearing fix for "編造 ETCH-X 連結" — the bot
+                # already foraged the paper, the URL is in the extracts table.
+                memory_block = ""
+                try:
+                    recent_extracts = await self.db.get_recent_extracts(days=2, limit=30)
+                    recent_insights = await self.db.get_recent_insights(days=2, limit=20)
+                    if recent_extracts or recent_insights:
+                        ext_lines = []
+                        for e in recent_extracts:
+                            title = (e.get("title") or "?")[:120]
+                            url = e.get("url") or "(no url)"
+                            one = (e.get("one_liner") or "")[:120]
+                            src = e.get("source_type") or "?"
+                            ext_lines.append(f"  [{src}] {title}\n    URL: {url}\n    {one}")
+                        ins_lines = []
+                        for i in recent_insights:
+                            iid = i.get("id", "")
+                            title = (i.get("title") or "?")[:120]
+                            body = (i.get("body") or "")[:200]
+                            ins_lines.append(f"  ({iid}) {title}\n    {body}")
+                        memory_block = (
+                            "\n\n[你最近 48 小時內自己 forage + digest 出來的東西。"
+                            "這些都是真實的 URL 跟 title，可以直接引用——不算「沒網路」]\n\n"
+                            "=== 最近的 extracts ===\n"
+                            + ("\n\n".join(ext_lines) if ext_lines else "  (none)")
+                            + "\n\n=== 最近的 insights ===\n"
+                            + ("\n\n".join(ins_lines) if ins_lines else "  (none)")
+                            + "\n[/記憶區結束]\n"
+                        )
+                except Exception as e:
+                    logger.warning(f"chat memory fetch failed: {e}")
+
                 # If user is replying to a specific bot message in Telegram,
-                # inject that message as load-bearing context. This is the
-                # main fix for "回覆會不知道我在回哪一則訊息".
+                # inject that message as load-bearing context.
                 replied_to_block = ""
                 rtm = update.message.reply_to_message
                 if rtm and rtm.text:
@@ -650,17 +719,17 @@ class TelegramBot:
                     "回覆要完整，不要在句子中間停。但也不要硬撐長度——夠了就停。\n"
                     "\n"
                     "幾條硬規則（很重要）：\n"
-                    "1. 你在 chat 模式下沒有網路、沒有搜尋工具、沒有 PubMed/arXiv access。\n"
-                    "   絕對不要編造 URL、paper title、作者名字、PMID、arXiv ID。\n"
-                    "   如果 Salmon 問你某篇 paper 的連結，誠實說：『我 chat 模式下沒有網路，\n"
-                    "   你要我用 /inject <關鍵字> 去 arXiv/PubMed 真的找一下嗎？』\n"
-                    "2. 仔細看上文。Salmon 說「這個」「那個」「剛剛那篇」時，去歷史紀錄裡\n"
-                    "   找他真正在指什麼。看不出來就主動問清楚，不要瞎猜然後繞回 soul.md。\n"
-                    "3. 如果 [使用者用 Telegram 的「回覆」功能引了你之前發的這則訊息] 標記出現，\n"
-                    "   那就是 Salmon 真正在回應的對象，把那則內容當成首要 context。\n"
-                    "4. 你之前發給 Salmon 的 insight 通知是真實的（從 digester 出來的）。\n"
-                    "   如果他在問某則 insight 的細節，你可以承認你只記得那則的 title/body，\n"
-                    "   不記得 source URL；要他用 /digest 看完整版。\n"
+                    "1. 你 chat 模式下沒有即時搜尋工具，但下面 [記憶區] 裡所有的 URL、title、\n"
+                    "   one-liner 都是你自己最近 48 小時內 forage 出來的，**全部是真實的**，\n"
+                    "   可以直接引用。Salmon 問你某篇 paper 的連結時，先去記憶區找。\n"
+                    "2. 如果他問的東西不在記憶區，誠實說：『我最近沒 forage 那個，要我用\n"
+                    "   /inject <關鍵字> 真的去找嗎？』然後給一個建議的 inject 指令。\n"
+                    "   絕對不要編 URL/title/PMID/arXiv ID。寧可說「我不記得」也不要瞎猜。\n"
+                    "3. Salmon 說「這個」「那個」「剛剛那篇」時，先看 [使用者正在回覆這則] 區塊，\n"
+                    "   再看對話歷史，再看記憶區。找不到就直接問「你指的是哪則？」\n"
+                    "4. 如果 Salmon 引了你之前的 insight 通知，那則 insight 的 id 應該在訊息裡，\n"
+                    "   你可以用那個 id 在記憶區找到完整 body 跟 source URL。\n"
+                    f"{memory_block}"
                     f"{replied_to_block}"
                 )
 
