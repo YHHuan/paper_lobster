@@ -478,6 +478,38 @@ class TelegramBot:
         if not self.lobster:
             await update.message.reply_text("❌ Lobster agent not initialized")
             return
+
+        # If a URL is passed as an arg, route through inject_url first.
+        # /post <url> means "digest this URL into the v3 pipeline so I can post about it later".
+        if context.args:
+            url_arg = next((a for a in context.args if a.startswith("http")), None)
+            if url_arg:
+                if not self.loop:
+                    await update.message.reply_text("❌ curiosity loop not initialized")
+                    return
+                await update.message.reply_text(
+                    f"🔗 /post 帶了 URL — 我先 digest 這篇而不是抓 top discovery\n{url_arg[:80]}"
+                )
+                try:
+                    result = await self.loop.inject_url(url_arg)
+                    if result.get("status") == "ok":
+                        conn = result.get("connection") or {}
+                        n_ins = len(result.get("insights") or [])
+                        await update.message.reply_text(
+                            f"✅ Digested.\n"
+                            f"connection_type: {conn.get('connection_type')}\n"
+                            f"insight: {(conn.get('insight') or '')[:300]}\n"
+                            f"產出 insights: {n_ins}\n\n"
+                            f"再打 /post（不帶參數）可以從消化結果挑一個發 X/Threads。"
+                        )
+                    else:
+                        await update.message.reply_text(f"❌ {result.get('reason', 'digest failed')}")
+                except Exception as e:
+                    logger.exception("/post URL digest failed")
+                    await update.message.reply_text(f"❌ digest error: {type(e).__name__}: {e}")
+                return
+
+        # Default v2.5 behavior — pick top discovery and run publish pipeline
         await update.message.reply_text("🦞 Triggering post creation...")
         try:
             await self.lobster.create_post()
@@ -589,30 +621,90 @@ class TelegramBot:
                 await update.message.reply_text(f"❌ URL inject error: {e}")
             return
 
-        # Natural language chat
+        # Natural language chat — with conversation memory + reply context + anti-hallucination
         if self.llm and self.lobster:
             try:
                 from utils.identity_loader import load_identity
                 identity = await load_identity(self.db)
+
+                # Pull per-user sliding-window history (last 6 turns = 12 messages)
+                history = context.user_data.setdefault("chat_history", [])
+
+                # If user is replying to a specific bot message in Telegram,
+                # inject that message as load-bearing context. This is the
+                # main fix for "回覆會不知道我在回哪一則訊息".
+                replied_to_block = ""
+                rtm = update.message.reply_to_message
+                if rtm and rtm.text:
+                    replied_to_block = (
+                        "\n\n[使用者用 Telegram 的「回覆」功能引了你之前發的這則訊息，"
+                        "他現在的話是針對這則的回應/延伸：]\n"
+                        f"{rtm.text[:1500]}\n"
+                        "[/引用結束]\n"
+                    )
+
                 system = (
                     f"{identity}\n\n"
-                    "你現在在跟你的主人用 Telegram 聊天。\n"
+                    "你現在在跟你的主人 Salmon 用 Telegram 聊天。\n"
                     "用繁體中文回覆，語氣自然口語，保持你的個性風格。\n"
-                    "回覆簡短（100字以內），不用正式開場白或結尾。"
+                    "回覆要完整，不要在句子中間停。但也不要硬撐長度——夠了就停。\n"
+                    "\n"
+                    "幾條硬規則（很重要）：\n"
+                    "1. 你在 chat 模式下沒有網路、沒有搜尋工具、沒有 PubMed/arXiv access。\n"
+                    "   絕對不要編造 URL、paper title、作者名字、PMID、arXiv ID。\n"
+                    "   如果 Salmon 問你某篇 paper 的連結，誠實說：『我 chat 模式下沒有網路，\n"
+                    "   你要我用 /inject <關鍵字> 去 arXiv/PubMed 真的找一下嗎？』\n"
+                    "2. 仔細看上文。Salmon 說「這個」「那個」「剛剛那篇」時，去歷史紀錄裡\n"
+                    "   找他真正在指什麼。看不出來就主動問清楚，不要瞎猜然後繞回 soul.md。\n"
+                    "3. 如果 [使用者用 Telegram 的「回覆」功能引了你之前發的這則訊息] 標記出現，\n"
+                    "   那就是 Salmon 真正在回應的對象，把那則內容當成首要 context。\n"
+                    "4. 你之前發給 Salmon 的 insight 通知是真實的（從 digester 出來的）。\n"
+                    "   如果他在問某則 insight 的細節，你可以承認你只記得那則的 title/body，\n"
+                    "   不記得 source URL；要他用 /digest 看完整版。\n"
+                    f"{replied_to_block}"
                 )
-                reply = await self.llm.chat("lobster", system, text, max_tokens=300)
-                await update.message.reply_text(reply.strip())
-            except Exception as e:
-                logger.error(f"Chat reply failed: {e}")
-                if self.db:
-                    await self.db.insert_discovery(
-                        source_type="thought",
-                        title=text[:80],
-                        summary=text,
-                        content_type="thought",
-                        interest_score=5,
+
+                # Flatten history into a single user message with role labels
+                history_text_parts = []
+                for h in history[-12:]:
+                    role_label = "Salmon" if h["role"] == "user" else "你（Lobster）"
+                    history_text_parts.append(f"{role_label}: {h['content']}")
+                history_block = "\n\n".join(history_text_parts)
+
+                if history_block:
+                    user_msg = (
+                        "以下是你跟 Salmon 最近的對話（最舊在上）：\n\n"
+                        f"{history_block}\n\n"
+                        f"Salmon 現在說：{text}\n\n"
+                        "你的回覆："
                     )
-                    await update.message.reply_text("💭 Stored as thought.")
+                else:
+                    user_msg = f"Salmon 說：{text}\n\n你的回覆："
+
+                reply = await self.llm.chat(
+                    agent="lobster_chat",
+                    system_prompt=system,
+                    user_message=user_msg,
+                    max_tokens=1500,
+                )
+                reply = (reply or "").strip()
+                if not reply:
+                    reply = "（空白回覆 — model 可能 timeout 或 max_tokens 撐不住，再講一次？）"
+
+                # Telegram 4096 char hard limit — let the formatter handle it
+                await update.message.reply_text(truncate_for_telegram(reply))
+
+                # Persist exchange (cap at last 12 messages)
+                history.append({"role": "user", "content": text})
+                history.append({"role": "assistant", "content": reply})
+                if len(history) > 12:
+                    del history[: len(history) - 12]
+
+            except Exception as e:
+                logger.exception("Chat reply failed")
+                await update.message.reply_text(
+                    f"❌ Chat error: {type(e).__name__}: {str(e)[:200]}"
+                )
         elif self.db:
             await self.db.insert_discovery(
                 source_type="thought",
