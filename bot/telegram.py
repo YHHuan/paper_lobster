@@ -144,14 +144,20 @@ class TelegramBot:
     # ── v3 NEW commands ──
 
     async def _cmd_health(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Ping local + remote LLM + DB. Returns latencies and pass/fail per component."""
+        """Ping local + remote LLM + DB. Acks immediately, then runs probes in parallel."""
         import asyncio
         import time
 
-        lines = ["🏥 Health check\n"]
+        # Immediate ack so the user knows we received the command
+        try:
+            placeholder = await update.message.reply_text("🏥 Running health check...")
+        except Exception as e:
+            logger.error(f"/health placeholder reply failed: {e}")
+            return
 
-        # 1. LOCAL LLM
-        if self.llm and self.llm.local.available:
+        async def probe_local():
+            if not (self.llm and self.llm.local.available):
+                return ("LOCAL", None, None, "not_configured", "設 LOCAL_LLM_BASE_URL 才能用")
             try:
                 t0 = time.monotonic()
                 reply = await asyncio.wait_for(
@@ -161,29 +167,20 @@ class TelegramBot:
                         user_message="Reply with exactly one word: pong",
                         max_tokens=10,
                     ),
-                    timeout=15.0,
+                    timeout=10.0,
                 )
-                dt_ms = (time.monotonic() - t0) * 1000
-                got_pong = "pong" in (reply or "").lower()
-                mark = "✅" if got_pong else "⚠️"
-                lines.append(f"{mark} LOCAL  {self.llm.local.model}")
-                lines.append(f"   {dt_ms:.0f}ms  reply: {(reply or '').strip()[:50]!r}")
-                if not got_pong:
-                    lines.append(f"   (連上但沒回 pong — endpoint OK，prompt-following 弱)")
+                return ("LOCAL", self.llm.local.model, (time.monotonic() - t0) * 1000, "ok", reply)
             except asyncio.TimeoutError:
-                lines.append(f"❌ LOCAL  {self.llm.local.model}")
-                lines.append(f"   timeout (>15s) — endpoint 沒回應")
+                return ("LOCAL", self.llm.local.model, None, "timeout", ">10s")
             except Exception as e:
-                lines.append(f"❌ LOCAL  {self.llm.local.model}")
-                lines.append(f"   {type(e).__name__}: {str(e)[:120]}")
-        else:
-            lines.append("⚠️ LOCAL  not configured")
-            lines.append("   設 LOCAL_LLM_BASE_URL 才能用 local tier")
+                return ("LOCAL", self.llm.local.model, None, type(e).__name__, str(e)[:120])
 
-        # 2. REMOTE LLM
-        if self.llm and self.llm.remote:
+        async def probe_remote():
+            if not (self.llm and self.llm.remote):
+                return ("REMOTE", None, None, "not_configured", "OPENROUTER_API_KEY 沒設?")
+            info = self.llm.get_model_info()
+            label = f"{info['name']} ({info['model_id']})"
             try:
-                info = self.llm.get_model_info()
                 t0 = time.monotonic()
                 reply = await asyncio.wait_for(
                     self.llm.chat_remote(
@@ -192,57 +189,109 @@ class TelegramBot:
                         user_message="Reply with exactly one word: pong",
                         max_tokens=10,
                     ),
-                    timeout=20.0,
+                    timeout=10.0,
                 )
-                dt_ms = (time.monotonic() - t0) * 1000
-                got_pong = "pong" in (reply or "").lower()
-                mark = "✅" if got_pong else "⚠️"
-                lines.append(f"\n{mark} REMOTE {info['name']} ({info['model_id']})")
-                lines.append(f"   {dt_ms:.0f}ms  reply: {(reply or '').strip()[:50]!r}")
+                return ("REMOTE", label, (time.monotonic() - t0) * 1000, "ok", reply)
             except asyncio.TimeoutError:
-                lines.append(f"\n❌ REMOTE  timeout (>20s)")
+                return ("REMOTE", label, None, "timeout", ">10s")
             except Exception as e:
-                lines.append(f"\n❌ REMOTE  {type(e).__name__}: {str(e)[:120]}")
-        else:
-            lines.append("\n❌ REMOTE  not initialized (OPENROUTER_API_KEY 沒設?)")
+                return ("REMOTE", label, None, type(e).__name__, str(e)[:120])
 
-        # 3. DB + v3 tables
-        if self.db:
+        async def probe_db():
+            if not self.db:
+                return ("DB", None, None, "not_connected", None)
             try:
                 t0 = time.monotonic()
-                weights = await self.db.get_source_weights()
+                weights = await asyncio.wait_for(self.db.get_source_weights(), timeout=5.0)
                 dt_ms = (time.monotonic() - t0) * 1000
-                lines.append(f"\n✅ DB  Supabase ({dt_ms:.0f}ms)")
-                lines.append(f"   source_weights: {len(weights)} rows")
+                extras = {"source_weights": len(weights)}
                 try:
-                    pending = await self.db.count_pending_questions()
-                    clusters = await self.db.list_clusters(limit=1)
-                    n_today = await self.db.get_today_loop_count()
-                    lines.append(
-                        f"   open_questions: {pending} pending | "
-                        f"clusters: {'ok' if isinstance(clusters, list) else 'fail'} | "
-                        f"loops today: {n_today}"
-                    )
+                    extras["pending_q"] = await asyncio.wait_for(self.db.count_pending_questions(), timeout=3.0)
+                    extras["loops_today"] = await asyncio.wait_for(self.db.get_today_loop_count(), timeout=3.0)
                 except Exception as e:
-                    lines.append(f"   ⚠️ v3 tables: {type(e).__name__} — schema_v3.sql 跑了嗎？")
+                    extras["v3_tables_error"] = f"{type(e).__name__} — schema_v3.sql 跑了嗎？"
+                return ("DB", "Supabase", dt_ms, "ok", extras)
+            except asyncio.TimeoutError:
+                return ("DB", "Supabase", None, "timeout", ">5s")
             except Exception as e:
-                lines.append(f"\n❌ DB  {type(e).__name__}: {str(e)[:120]}")
-        else:
-            lines.append("\n❌ DB  not connected")
+                return ("DB", "Supabase", None, type(e).__name__, str(e)[:120])
 
-        # 4. Curiosity loop state
-        if self.loop and self.db:
+        async def probe_loop():
+            if not (self.loop and self.db):
+                return ("LOOP", None, None, "not_initialized", None)
             try:
                 running = "running" if self.loop.running else "idle"
-                paused = await self.db.is_loop_paused()
+                paused = await asyncio.wait_for(self.db.is_loop_paused(), timeout=3.0)
                 state = "⏸ paused" if paused else f"🏃 {running}"
-                lines.append(f"\n✅ Curiosity loop  {state}")
+                return ("LOOP", "Curiosity loop", None, "ok", state)
             except Exception as e:
-                lines.append(f"\n⚠️ Curiosity loop  {type(e).__name__}: {str(e)[:80]}")
-        else:
-            lines.append("\n❌ Curiosity loop  not initialized")
+                return ("LOOP", "Curiosity loop", None, type(e).__name__, str(e)[:80])
 
-        await update.message.reply_text("\n".join(lines))
+        # Run all four in parallel — total wall time ≈ slowest probe (~10s max)
+        try:
+            results = await asyncio.wait_for(
+                asyncio.gather(probe_local(), probe_remote(), probe_db(), probe_loop()),
+                timeout=15.0,
+            )
+        except asyncio.TimeoutError:
+            try:
+                await placeholder.edit_text("❌ /health timed out (>15s overall)")
+            except Exception:
+                pass
+            return
+        except Exception as e:
+            logger.exception("/health gather failed")
+            try:
+                await placeholder.edit_text(f"❌ /health crashed: {type(e).__name__}: {e}")
+            except Exception:
+                pass
+            return
+
+        # Format
+        lines = ["🏥 Health check\n"]
+        for name, label, dt_ms, status, extra in results:
+            if status == "ok":
+                if name == "DB":
+                    lines.append(f"✅ {name}  {label} ({dt_ms:.0f}ms)")
+                    if isinstance(extra, dict):
+                        sw = extra.get("source_weights", "?")
+                        pq = extra.get("pending_q", "?")
+                        lt = extra.get("loops_today", "?")
+                        lines.append(f"   weights={sw}  pending_q={pq}  loops_today={lt}")
+                        if extra.get("v3_tables_error"):
+                            lines.append(f"   ⚠️ {extra['v3_tables_error']}")
+                elif name == "LOOP":
+                    lines.append(f"✅ {name}  {extra}")
+                else:
+                    got_pong = "pong" in (str(extra) or "").lower()
+                    mark = "✅" if got_pong else "⚠️"
+                    snippet = (str(extra) or "").strip()[:50]
+                    lines.append(f"{mark} {name}  {label}")
+                    lines.append(f"   {dt_ms:.0f}ms  reply: {snippet!r}")
+                    if not got_pong:
+                        lines.append("   (連上但沒回 pong — endpoint OK，prompt-following 弱)")
+            elif status == "not_configured":
+                lines.append(f"⚠️ {name}  not configured")
+                if extra:
+                    lines.append(f"   {extra}")
+            elif status in ("not_connected", "not_initialized"):
+                lines.append(f"❌ {name}  {status.replace('_', ' ')}")
+            elif status == "timeout":
+                lines.append(f"❌ {name}  {label or ''}  timeout {extra or ''}")
+            else:  # exception class name
+                lines.append(f"❌ {name}  {label or ''}")
+                lines.append(f"   {status}: {extra}")
+            lines.append("")  # spacer
+
+        text = "\n".join(lines).rstrip()
+        try:
+            await placeholder.edit_text(text)
+        except Exception as e:
+            logger.error(f"/health edit failed: {e}")
+            try:
+                await update.message.reply_text(text)
+            except Exception:
+                pass
 
     async def _cmd_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self.db:
