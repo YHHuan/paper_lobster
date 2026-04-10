@@ -27,6 +27,7 @@ logger = logging.getLogger("lobster.bot")
 MENU_COMMANDS = [
     BotCommand("start",     "Show all commands"),
     BotCommand("health",    "Ping local + remote LLM + DB"),
+    BotCommand("memory",    "Show 48h chat memory (extracts + insights)"),
     # ── 探索控制 (v3)
     BotCommand("status",    "Curiosity loop status"),
     BotCommand("questions", "Show pending open_questions"),
@@ -79,6 +80,7 @@ class TelegramBot:
 
         # v3 NEW commands
         self.app.add_handler(CommandHandler("health",    self._cmd_health))
+        self.app.add_handler(CommandHandler("memory",    self._cmd_memory))
         self.app.add_handler(CommandHandler("status",    self._cmd_status))
         self.app.add_handler(CommandHandler("questions", self._cmd_questions))
         self.app.add_handler(CommandHandler("inject",    self._cmd_inject))
@@ -118,6 +120,7 @@ class TelegramBot:
         await update.message.reply_text(
             "🦞 Lobster v3.0 — 你的研究探索龍蝦\n\n"
             "🏥 /health — ping local + remote LLM + DB\n"
+            "🧠 /memory — 看 chat 模式現在能 recall 的 48h 記憶\n"
             "\n── 🔬 探索控制 ──\n"
             "📊 /status — 龍蝦現在在幹嘛\n"
             "❓ /questions — 目前的 open questions\n"
@@ -373,6 +376,42 @@ class TelegramBot:
         text = await self.db.get_recent_digest_summary(days=2)
         await update.message.reply_text(f"📚 Recent digest (2d):\n\n{text}")
 
+    async def _cmd_memory(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show what chat-mode can recall right now (48h extracts + insights).
+
+        Use this to verify the lobster's chat memory before assuming it's
+        hallucinating — if /memory shows the item, the bot SHOULD know it.
+        """
+        if not self.db:
+            await update.message.reply_text("DB not connected")
+            return
+        try:
+            extracts = await self.db.get_recent_extracts(days=2, limit=30)
+            insights = await self.db.get_recent_insights(days=2, limit=20)
+        except Exception as e:
+            await update.message.reply_text(f"❌ DB query failed: {type(e).__name__}: {e}")
+            return
+
+        lines = [f"🧠 Chat memory (48h)\n"]
+        lines.append(f"=== Extracts ({len(extracts)}) ===")
+        if not extracts:
+            lines.append("  (空 — 還沒有 forage 過任何東西)")
+        for e in extracts[:30]:
+            title = (e.get("title") or "?")[:100]
+            url = e.get("url") or "(no url)"
+            src = e.get("source_type") or "?"
+            lines.append(f"\n  [{src}] {title}\n  {url}")
+
+        lines.append(f"\n\n=== Insights ({len(insights)}) ===")
+        if not insights:
+            lines.append("  (空 — 還沒有產出任何 insight)")
+        for i in insights[:20]:
+            iid = i.get("id", "?")
+            title = (i.get("title") or "?")[:100]
+            lines.append(f"\n  {iid}\n  {title}")
+
+        await self._send_long(update, "\n".join(lines))
+
     async def _cmd_evolve(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self.evolver:
             await update.message.reply_text("❌ evolver not initialized")
@@ -626,6 +665,81 @@ class TelegramBot:
         await self.db.add_tracked_handle(handle, reason)
         await update.message.reply_text(f"✅ Now tracking @{handle}")
 
+    # ── Helpers ──
+
+    async def _send_long(self, update: Update, text: str, chunk_size: int = 3500):
+        """Split long text on paragraph boundaries and send as multiple Telegram messages.
+
+        Telegram's hard limit is 4096 chars; we use 3500 for safety margin.
+        Tries paragraph boundaries first, falls back to line, then hard split.
+        """
+        if not text:
+            return
+        if len(text) <= chunk_size:
+            await update.message.reply_text(text)
+            return
+
+        chunks = []
+        remaining = text
+        while len(remaining) > chunk_size:
+            split_at = remaining.rfind("\n\n", 0, chunk_size)
+            if split_at == -1 or split_at < chunk_size // 2:
+                split_at = remaining.rfind("\n", 0, chunk_size)
+            if split_at == -1 or split_at < chunk_size // 2:
+                split_at = remaining.rfind("。", 0, chunk_size)
+            if split_at == -1 or split_at < chunk_size // 2:
+                split_at = chunk_size
+            chunks.append(remaining[:split_at].rstrip())
+            remaining = remaining[split_at:].lstrip()
+        if remaining:
+            chunks.append(remaining)
+
+        total = len(chunks)
+        for i, c in enumerate(chunks, 1):
+            prefix = f"({i}/{total}) " if total > 1 else ""
+            try:
+                await update.message.reply_text(prefix + c)
+            except Exception as e:
+                logger.error(f"_send_long chunk {i}/{total} failed: {e}")
+
+    @staticmethod
+    def _extract_keywords(text: str) -> list[str]:
+        """Pull plausible search keywords out of a user message.
+
+        Splits on whitespace + Chinese punctuation, drops stopwords and very
+        short or very long chunks. Used to pre-match against extracts/insights.
+        """
+        chunks = re.split(r"[\s,.!?;:，。！？；：、（）()「」『』《》<>\"'`/\\\[\]{}]+", text)
+        stop = {
+            "的", "了", "是", "在", "我", "你", "他", "她", "我們", "你們", "他們",
+            "這", "那", "這個", "那個", "什麼", "怎麼", "為什麼", "嗎", "吧", "啊",
+            "有", "沒有", "可以", "請", "幫", "想", "要", "覺得", "感覺", "剛剛",
+            "the", "a", "an", "and", "or", "but", "for", "of", "to", "in", "on",
+            "with", "from", "by", "as", "is", "are", "was", "were", "be", "this",
+            "that", "these", "those",
+        }
+        out = []
+        for c in chunks:
+            c = c.strip()
+            if 2 <= len(c) <= 25 and c.lower() not in stop:
+                out.append(c)
+        return out[:15]
+
+    @staticmethod
+    def _match_items(keywords: list[str], items: list[dict], fields: list[str], max_hits: int = 5) -> list[dict]:
+        """Score items by keyword overlap against given fields, return top max_hits."""
+        if not keywords or not items:
+            return []
+        kws = [k.lower() for k in keywords]
+        scored = []
+        for it in items:
+            haystack = " ".join(str(it.get(f, "") or "") for f in fields).lower()
+            hits = sum(1 for k in kws if k in haystack)
+            if hits > 0:
+                scored.append((hits, it))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [it for _, it in scored[:max_hits]]
+
     # ── Message handling ──
 
     async def _handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -668,12 +782,55 @@ class TelegramBot:
 
                 # Pull the lobster's RECENT MEMORY from DB so it can ground replies
                 # in real foraged content instead of hallucinating URLs/titles.
-                # This is the load-bearing fix for "編造 ETCH-X 連結" — the bot
-                # already foraged the paper, the URL is in the extracts table.
                 memory_block = ""
+                matched_block = ""
                 try:
                     recent_extracts = await self.db.get_recent_extracts(days=2, limit=30)
                     recent_insights = await self.db.get_recent_insights(days=2, limit=20)
+                    logger.info(
+                        f"chat memory fetched: {len(recent_extracts)} extracts, "
+                        f"{len(recent_insights)} insights"
+                    )
+
+                    # Step 1: keyword-match the user message against titles/bodies
+                    # Surface top hits at the TOP of the prompt with a strong directive,
+                    # so the LLM doesn't have to find them lost-in-middle.
+                    keywords = self._extract_keywords(text)
+                    matched_extracts = self._match_items(
+                        keywords, recent_extracts,
+                        fields=["title", "one_liner"], max_hits=5,
+                    )
+                    matched_insights = self._match_items(
+                        keywords, recent_insights,
+                        fields=["title", "body"], max_hits=5,
+                    )
+
+                    if matched_extracts or matched_insights:
+                        m_lines = ["\n\n[⭐ 重要：以下是 Salmon 訊息裡 keyword 命中的項目，"
+                                   "他多半就是在問這些。URL 跟 title 都是真實的，直接引用]\n"]
+                        if matched_extracts:
+                            m_lines.append("=== 命中的 extracts ===")
+                            for e in matched_extracts:
+                                title = (e.get("title") or "?")[:200]
+                                url = e.get("url") or "(no url)"
+                                one = (e.get("one_liner") or "")[:200]
+                                src = e.get("source_type") or "?"
+                                m_lines.append(f"\n  [{src}] {title}\n    URL: {url}\n    {one}")
+                        if matched_insights:
+                            m_lines.append("\n\n=== 命中的 insights ===")
+                            for i in matched_insights:
+                                iid = i.get("id", "")
+                                title = (i.get("title") or "?")[:200]
+                                body = (i.get("body") or "")[:400]
+                                m_lines.append(f"\n  ({iid}) {title}\n    {body}")
+                        m_lines.append("\n[/⭐命中區結束]\n")
+                        matched_block = "\n".join(m_lines)
+                        logger.info(
+                            f"chat keyword match: {len(matched_extracts)} extracts, "
+                            f"{len(matched_insights)} insights from kws={keywords[:5]}"
+                        )
+
+                    # Step 2: full memory block as fallback context
                     if recent_extracts or recent_insights:
                         ext_lines = []
                         for e in recent_extracts:
@@ -689,16 +846,16 @@ class TelegramBot:
                             body = (i.get("body") or "")[:200]
                             ins_lines.append(f"  ({iid}) {title}\n    {body}")
                         memory_block = (
-                            "\n\n[你最近 48 小時內自己 forage + digest 出來的東西。"
-                            "這些都是真實的 URL 跟 title，可以直接引用——不算「沒網路」]\n\n"
-                            "=== 最近的 extracts ===\n"
+                            "\n\n[你最近 48 小時內自己 forage + digest 出來的所有東西。"
+                            "這些 URL 跟 title 都是真實的，可以直接引用]\n\n"
+                            "=== 全部 extracts ===\n"
                             + ("\n\n".join(ext_lines) if ext_lines else "  (none)")
-                            + "\n\n=== 最近的 insights ===\n"
+                            + "\n\n=== 全部 insights ===\n"
                             + ("\n\n".join(ins_lines) if ins_lines else "  (none)")
                             + "\n[/記憶區結束]\n"
                         )
                 except Exception as e:
-                    logger.warning(f"chat memory fetch failed: {e}")
+                    logger.exception(f"chat memory fetch failed: {e}")
 
                 # If user is replying to a specific bot message in Telegram,
                 # inject that message as load-bearing context.
@@ -719,16 +876,19 @@ class TelegramBot:
                     "回覆要完整，不要在句子中間停。但也不要硬撐長度——夠了就停。\n"
                     "\n"
                     "幾條硬規則（很重要）：\n"
-                    "1. 你 chat 模式下沒有即時搜尋工具，但下面 [記憶區] 裡所有的 URL、title、\n"
-                    "   one-liner 都是你自己最近 48 小時內 forage 出來的，**全部是真實的**，\n"
-                    "   可以直接引用。Salmon 問你某篇 paper 的連結時，先去記憶區找。\n"
-                    "2. 如果他問的東西不在記憶區，誠實說：『我最近沒 forage 那個，要我用\n"
-                    "   /inject <關鍵字> 真的去找嗎？』然後給一個建議的 inject 指令。\n"
-                    "   絕對不要編 URL/title/PMID/arXiv ID。寧可說「我不記得」也不要瞎猜。\n"
-                    "3. Salmon 說「這個」「那個」「剛剛那篇」時，先看 [使用者正在回覆這則] 區塊，\n"
-                    "   再看對話歷史，再看記憶區。找不到就直接問「你指的是哪則？」\n"
-                    "4. 如果 Salmon 引了你之前的 insight 通知，那則 insight 的 id 應該在訊息裡，\n"
-                    "   你可以用那個 id 在記憶區找到完整 body 跟 source URL。\n"
+                    "1. 下面 [⭐命中區] 是用 Salmon 的 keyword 在你的記憶裡 grep 過的結果。\n"
+                    "   **如果命中區有東西，你 99% 就是在被問這些**。直接引用裡面的 title 跟 URL。\n"
+                    "2. 你 chat 模式下沒有即時搜尋工具，但 [⭐命中區] 跟 [記憶區] 裡所有的 URL、\n"
+                    "   title、one-liner 都是你自己最近 48 小時內 forage 出來的，**全部是真實的**。\n"
+                    "3. 如果命中區是空的、記憶區也找不到，誠實說：『我最近沒 forage 那個，\n"
+                    "   要我用 /inject <關鍵字> 真的去找嗎？』然後給一個具體的 inject 指令。\n"
+                    "   絕對不要編 URL / title / PMID / arXiv ID / 作者名字。\n"
+                    "   寧可說「我不記得」也不要瞎猜。Yang et al. 2019 那種編造是嚴重失誤。\n"
+                    "4. Salmon 說「這個」「那個」「剛剛那篇」時，先看 [使用者正在回覆這則] 區塊，\n"
+                    "   再看 [⭐命中區]，再看對話歷史，再看 [記憶區]。找不到就直接問「你指的是哪則？」\n"
+                    "5. 如果 Salmon 引了 insight 通知（裡面有 id: ins_xxx），用那個 id 在記憶區\n"
+                    "   找到對應的 source URL。\n"
+                    f"{matched_block}"
                     f"{memory_block}"
                     f"{replied_to_block}"
                 )
@@ -754,14 +914,15 @@ class TelegramBot:
                     agent="lobster_chat",
                     system_prompt=system,
                     user_message=user_msg,
-                    max_tokens=1500,
+                    tier="remote",      # explicit — chat needs Sonnet's instruction-following
+                    max_tokens=2500,
                 )
                 reply = (reply or "").strip()
                 if not reply:
                     reply = "（空白回覆 — model 可能 timeout 或 max_tokens 撐不住，再講一次？）"
 
-                # Telegram 4096 char hard limit — let the formatter handle it
-                await update.message.reply_text(truncate_for_telegram(reply))
+                # Telegram 4096 char hard limit — auto-split long replies
+                await self._send_long(update, reply)
 
                 # Persist exchange (cap at last 12 messages)
                 history.append({"role": "user", "content": text})
