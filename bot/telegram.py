@@ -252,6 +252,16 @@ class TelegramBot:
 
         # Format
         lines = ["🏥 Health check\n"]
+
+        # Show local→remote fallback counter at the top
+        if self.llm:
+            n = getattr(self.llm, "local_fallback_count", 0)
+            if n > 0:
+                last = getattr(self.llm, "last_local_fallback_reason", "?")
+                lines.append(f"⚠️ LOCAL→REMOTE fallbacks this session: {n}")
+                lines.append(f"   last reason: {last}")
+                lines.append("")
+
         for name, label, dt_ms, status, extra in results:
             if status == "ok":
                 if name == "DB":

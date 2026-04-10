@@ -7,15 +7,19 @@ Two tiers:
            high-quality writing, anything that needs long context + reasoning.
 
 The router exposes a unified `chat()` and `chat_json()` API that takes a `tier`
-argument. Token tracking is delegated to the underlying client.
+argument. If tier="local" but the local server is unreachable (ConnectError,
+TimeoutError, etc), the router automatically falls back to REMOTE so the
+pipeline keeps working — at the cost of Sonnet tokens. Each fallback is logged
+and counted; check `/health` or `/status` to see the running total.
 
 Backward-compat shim: older code that imported `LLMClient` from `llm/client.py`
-should now import `LLMRouter` from `llm/router.py` and either pass `tier="remote"`
-explicitly or use the convenience methods.
+should now import `LLMRouter` from `llm/router.py`.
 """
 
 import logging
 from typing import Literal
+
+import httpx
 
 from .local_client import LocalLLMClient, LocalLLMError
 from .remote_client import RemoteLLMClient, RemoteLLMError
@@ -33,6 +37,10 @@ class LLMRouter:
         except RemoteLLMError as e:
             logger.error(f"Remote client init failed: {e}")
             self.remote = None
+
+        # Track local→remote fallbacks so /health and /status can show this
+        self.local_fallback_count = 0
+        self.last_local_fallback_reason: str | None = None
 
     # ── Bookkeeping ──
 
@@ -73,16 +81,26 @@ class LLMRouter:
     ) -> str:
         if tier == "local":
             if not self.local.available:
-                logger.warning(f"[{agent}] LOCAL not available, falling back to REMOTE")
+                logger.warning(f"[{agent}] LOCAL not configured, using REMOTE")
                 tier = "remote"
             else:
-                return await self.local.chat(
-                    agent=agent,
-                    system_prompt=system_prompt,
-                    user_message=user_message,
-                    max_tokens=max_tokens,
-                    json_mode=json_mode,
-                )
+                try:
+                    return await self.local.chat(
+                        agent=agent,
+                        system_prompt=system_prompt,
+                        user_message=user_message,
+                        max_tokens=max_tokens,
+                        json_mode=json_mode,
+                    )
+                except (LocalLLMError, httpx.RequestError, httpx.HTTPError, OSError) as e:
+                    self.local_fallback_count += 1
+                    reason = f"{type(e).__name__}: {str(e)[:120]}"
+                    self.last_local_fallback_reason = reason
+                    logger.warning(
+                        f"[{agent}] LOCAL failed ({reason}), falling back to REMOTE "
+                        f"(total fallbacks this session: {self.local_fallback_count})"
+                    )
+                    # fall through to REMOTE below
         if not self.remote:
             raise RuntimeError("Remote LLM not available and local fallback exhausted")
         return await self.remote.chat(
@@ -102,7 +120,19 @@ class LLMRouter:
         max_tokens: int | None = None,
     ) -> dict | list:
         if tier == "local" and self.local.available:
-            return await self.local.chat_json(agent, system_prompt, user_message, max_tokens=max_tokens)
+            try:
+                return await self.local.chat_json(
+                    agent, system_prompt, user_message, max_tokens=max_tokens,
+                )
+            except (LocalLLMError, httpx.RequestError, httpx.HTTPError, OSError) as e:
+                self.local_fallback_count += 1
+                reason = f"{type(e).__name__}: {str(e)[:120]}"
+                self.last_local_fallback_reason = reason
+                logger.warning(
+                    f"[{agent}] LOCAL json failed ({reason}), falling back to REMOTE "
+                    f"(total fallbacks this session: {self.local_fallback_count})"
+                )
+                # fall through to remote
         if not self.remote:
             raise RuntimeError("Remote LLM not available")
         return await self.remote.chat_json(agent, system_prompt, user_message, max_tokens=max_tokens or 2048)
