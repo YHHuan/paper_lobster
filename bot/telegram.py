@@ -914,7 +914,7 @@ class TelegramBot:
                     agent="lobster_chat",
                     system_prompt=system,
                     user_message=user_msg,
-                    tier="remote",      # explicit — chat needs Sonnet's instruction-following
+                    tier="local",       # default to local gpt-oss-120b — only Connect uses remote
                     max_tokens=2500,
                 )
                 reply = (reply or "").strip()
