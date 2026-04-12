@@ -442,8 +442,16 @@ class TelegramBot:
 
     # ── Message handling ──
 
+    def _get_reply_context(self, update: Update) -> str:
+        """Extract the text of the message being replied to, if any."""
+        reply = update.message.reply_to_message
+        if not reply or not reply.text:
+            return ""
+        return reply.text
+
     async def _handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = update.message.text.strip()
+        reply_ctx = self._get_reply_context(update)
 
         # URL detection → route to curiosity loop's inject_url
         url_match = re.search(r'https?://\S+', text)
@@ -476,13 +484,29 @@ class TelegramBot:
             try:
                 from utils.identity_loader import load_identity
                 identity = await load_identity(self.db)
+
+                # Build user message with reply context
+                if reply_ctx:
+                    user_msg = (
+                        f"[主人正在回覆這則訊息]\n"
+                        f"───\n{reply_ctx[:1500]}\n───\n\n"
+                        f"主人說：{text}"
+                    )
+                else:
+                    user_msg = text
+
                 system = (
                     f"{identity}\n\n"
                     "你現在在跟你的主人用 Telegram 聊天。\n"
                     "用繁體中文回覆，語氣自然口語，保持你的個性風格。\n"
-                    "回覆簡短（100字以內），不用正式開場白或結尾。"
+                    "回覆簡短（200字以內），不用正式開場白或結尾。\n\n"
+                    "重要規則：\n"
+                    "- 如果主人回覆的是你之前發的 💡 insight，你要針對那則 insight 的內容回答\n"
+                    "- 「這個」「這篇」「上面那個」= 主人回覆的那則訊息的內容\n"
+                    "- 如果主人問「原文」「連結」「paper」，查看 insight 裡的 sources 區塊，或告訴他 source 資訊\n"
+                    "- 不要說「你指的是哪個」——如果有回覆上下文，你就知道是哪個"
                 )
-                reply = await self.llm.chat("lobster", system, text, max_tokens=300)
+                reply = await self.llm.chat("lobster", system, user_msg, max_tokens=500)
                 await update.message.reply_text(reply.strip())
             except Exception as e:
                 logger.error(f"Chat reply failed: {e}")

@@ -284,7 +284,26 @@ class CuriosityLoop:
                 body = ins.get("body", "")[:600]
                 hook = ins.get("hook_score", "?")
                 pub = "📤 publishable" if ins.get("publishable") else ""
+
+                # Resolve source links from extract IDs
+                source_lines = []
+                for ext_id in (ins.get("source_extracts") or [])[:3]:
+                    try:
+                        ext = await self.db.get_extract(ext_id)
+                        if ext:
+                            label = ext.get("title", "")[:80] or ext_id
+                            url = ext.get("url") or ""
+                            sid = ext.get("source_id") or ""
+                            if url:
+                                source_lines.append(f"🔗 {label}\n   {url}")
+                            elif sid:
+                                source_lines.append(f"🔗 {label} [{sid}]")
+                    except Exception:
+                        pass
+
                 msg = f"💡 {title}\n\n{body}\n\nhook={hook} {pub}"
+                if source_lines:
+                    msg += "\n\n── sources ──\n" + "\n".join(source_lines)
                 await self.telegram.notify(msg)
             except Exception:
                 pass
