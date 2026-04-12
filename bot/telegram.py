@@ -6,6 +6,11 @@ Handles:
 - v3 NEW commands: /status /questions /inject /knowledge /digest /evolve
 - URL input → routed to curiosity loop's `inject_url`
 - Text input → natural-language chat with the lobster
+
+Reply context: ALL user messages (commands and free text) pass through
+_enrich_reply_context() which extracts the replied-to message and resolves
+entity references (#id, ins_xxx) from the DB.  The enriched context is stored
+in `context.chat_data["reply_ctx"]` so every handler can use it.
 """
 
 import os
@@ -91,6 +96,118 @@ class TelegramBot:
         ))
 
         return self.app
+
+    # ── Universal reply context ──
+
+    async def _enrich_reply_context(self, update: Update) -> dict:
+        """Extract replied-to message and resolve entity references from DB.
+
+        Returns a dict with:
+          raw_text:  the full text of the replied-to message (empty str if none)
+          entities:  list of resolved dicts, e.g.:
+                     {"type": "question", "id": 60, "detail": "..."}
+                     {"type": "insight",  "id": "ins_xxx", "detail": "..."}
+                     {"type": "extract",  "id": "ext_xxx", "url": "...", "title": "..."}
+        """
+        reply = update.message.reply_to_message
+        if not reply or not reply.text:
+            return {"raw_text": "", "entities": []}
+
+        raw = reply.text
+        entities = []
+
+        # Resolve #<number> → open_question
+        for m in re.finditer(r'#(\d+)', raw):
+            qid = int(m.group(1))
+            if self.db:
+                try:
+                    rows = await self.db._select("open_questions", {
+                        "select": "id,question,soul_anchor,priority",
+                        "id": f"eq.{qid}",
+                        "limit": "1",
+                    })
+                    if rows:
+                        q = rows[0]
+                        entities.append({
+                            "type": "question",
+                            "id": qid,
+                            "detail": q.get("question", ""),
+                            "soul_anchor": q.get("soul_anchor"),
+                        })
+                except Exception:
+                    pass
+
+        # Resolve ins_xxx → insight
+        for m in re.finditer(r'(ins_\w+)', raw):
+            iid = m.group(1)
+            if self.db:
+                try:
+                    rows = await self.db._select("insights", {
+                        "select": "id,title,body,source_extracts",
+                        "id": f"eq.{iid}",
+                        "limit": "1",
+                    })
+                    if rows:
+                        ins = rows[0]
+                        entities.append({
+                            "type": "insight",
+                            "id": iid,
+                            "detail": f"{ins.get('title', '')}: {ins.get('body', '')[:300]}",
+                            "source_extracts": ins.get("source_extracts") or [],
+                        })
+                except Exception:
+                    pass
+
+        # Resolve ext_xxx → extract (with URL)
+        for m in re.finditer(r'(ext_\w+)', raw):
+            eid = m.group(1)
+            if self.db:
+                try:
+                    ext = await self.db.get_extract(eid)
+                    if ext:
+                        entities.append({
+                            "type": "extract",
+                            "id": eid,
+                            "title": ext.get("title", ""),
+                            "url": ext.get("url", ""),
+                            "source_id": ext.get("source_id", ""),
+                        })
+                except Exception:
+                    pass
+
+        return {"raw_text": raw, "entities": entities}
+
+    def _format_reply_context(self, ctx: dict) -> str:
+        """Turn enriched reply context into a text block for LLM input."""
+        if not ctx.get("raw_text"):
+            return ""
+
+        parts = [
+            "[主人正在回覆這則訊息]",
+            "───",
+            ctx["raw_text"][:2000],
+            "───",
+        ]
+
+        if ctx.get("entities"):
+            parts.append("\n[以下是從資料庫查到的相關資訊]")
+            for e in ctx["entities"]:
+                if e["type"] == "question":
+                    parts.append(
+                        f"  問題 #{e['id']}: {e['detail']}"
+                        + (f" (⚓ {e['soul_anchor']})" if e.get("soul_anchor") else "")
+                    )
+                elif e["type"] == "insight":
+                    parts.append(f"  Insight {e['id']}: {e['detail']}")
+                elif e["type"] == "extract":
+                    line = f"  Extract {e['id']}: {e.get('title', '')}"
+                    if e.get("url"):
+                        line += f"\n    URL: {e['url']}"
+                    if e.get("source_id"):
+                        line += f" [{e['source_id']}]"
+                    parts.append(line)
+
+        return "\n".join(parts)
 
     async def set_menu(self):
         if self.app and self.app.bot:
@@ -442,16 +559,10 @@ class TelegramBot:
 
     # ── Message handling ──
 
-    def _get_reply_context(self, update: Update) -> str:
-        """Extract the text of the message being replied to, if any."""
-        reply = update.message.reply_to_message
-        if not reply or not reply.text:
-            return ""
-        return reply.text
-
     async def _handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = update.message.text.strip()
-        reply_ctx = self._get_reply_context(update)
+        reply_ctx = await self._enrich_reply_context(update)
+        reply_block = self._format_reply_context(reply_ctx)
 
         # URL detection → route to curiosity loop's inject_url
         url_match = re.search(r'https?://\S+', text)
@@ -486,12 +597,8 @@ class TelegramBot:
                 identity = await load_identity(self.db)
 
                 # Build user message with reply context
-                if reply_ctx:
-                    user_msg = (
-                        f"[主人正在回覆這則訊息]\n"
-                        f"───\n{reply_ctx[:1500]}\n───\n\n"
-                        f"主人說：{text}"
-                    )
+                if reply_block:
+                    user_msg = f"{reply_block}\n\n主人說：{text}"
                 else:
                     user_msg = text
 
@@ -501,10 +608,12 @@ class TelegramBot:
                     "用繁體中文回覆，語氣自然口語，保持你的個性風格。\n"
                     "回覆簡短（200字以內），不用正式開場白或結尾。\n\n"
                     "重要規則：\n"
-                    "- 如果主人回覆的是你之前發的 💡 insight，你要針對那則 insight 的內容回答\n"
-                    "- 「這個」「這篇」「上面那個」= 主人回覆的那則訊息的內容\n"
-                    "- 如果主人問「原文」「連結」「paper」，查看 insight 裡的 sources 區塊，或告訴他 source 資訊\n"
-                    "- 不要說「你指的是哪個」——如果有回覆上下文，你就知道是哪個"
+                    "- 回覆上下文（[主人正在回覆這則訊息] 區塊）是主人正在談論的內容，必須優先參考\n"
+                    "- [從資料庫查到的相關資訊] 是真實資料，引用時必須使用這些資訊，不可編造\n"
+                    "- 「這個」「這篇」「上面那個」「#數字」= 回覆上下文裡的內容\n"
+                    "- 如果主人問「原文」「連結」「paper」，從回覆上下文的 URL 或 source 資訊回答\n"
+                    "- 絕對不要說「你指的是哪個」——如果有回覆上下文，你就知道是哪個\n"
+                    "- 不知道的就說不知道，不要編造論文標題、連結、或內容"
                 )
                 reply = await self.llm.chat("lobster", system, user_msg, max_tokens=500)
                 await update.message.reply_text(reply.strip())
