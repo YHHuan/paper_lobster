@@ -1,4 +1,4 @@
-"""Local OpenAI-compatible LLM client (gpt-oss-b or any local endpoint).
+"""Local OpenAI-compatible LLM client.
 
 Used for cheap, high-volume tasks: Reflect, Hypothesize, Extract, Synthesize,
 Evolve, query generation, hook check, AI-smell check.
@@ -11,6 +11,8 @@ import asyncio
 import httpx
 
 logger = logging.getLogger("lobster.llm.local")
+
+DEFAULT_LOCAL_MODEL = "nemotron-super-1m"
 
 
 class LocalLLMError(Exception):
@@ -26,10 +28,16 @@ class LocalLLMClient:
             # Fall back to OPENAI_BASE_URL for backward compat with v2
             base = os.environ.get("OPENAI_BASE_URL", "").rstrip("/")
         self.base_url = base
-        self.model = os.environ.get("LOCAL_LLM_MODEL") or os.environ.get("LLM_MODEL", "gpt-oss-b")
+        self.model = (
+            os.environ.get("LOCAL_LLM_MODEL")
+            or os.environ.get("LLM_MODEL")
+            or DEFAULT_LOCAL_MODEL
+        )
         self.max_tokens_default = int(os.environ.get("LOCAL_LLM_MAX_TOKENS", "4096"))
 
         self._client: httpx.AsyncClient | None = None
+        self._remote_models: list[str] | None = None  # cached from /models
+
         if self.base_url:
             key = os.environ.get("LOCAL_LLM_API_KEY") or os.environ.get("OPENAI_API_KEY", "none")
             self._client = httpx.AsyncClient(
@@ -51,6 +59,36 @@ class LocalLLMClient:
     @property
     def available(self) -> bool:
         return self._client is not None
+
+    # ── Model discovery & switching ──
+
+    async def fetch_models(self) -> list[str]:
+        """Query the /models endpoint and return list of model IDs."""
+        if not self._client:
+            return []
+        try:
+            resp = await self._client.get("/models")
+            resp.raise_for_status()
+            data = resp.json()
+            models = [m["id"] for m in data.get("data", [])]
+            self._remote_models = models
+            logger.info(f"Local endpoint models: {models}")
+            return models
+        except Exception as e:
+            logger.warning(f"Failed to fetch local models: {e}")
+            return self._remote_models or []
+
+    def get_cached_models(self) -> list[str]:
+        """Return previously fetched model list (no network call)."""
+        return self._remote_models or []
+
+    def set_model(self, model_id: str) -> bool:
+        """Switch active local model. Returns True if accepted."""
+        # Accept any model — the endpoint will reject invalid ones at call time
+        old = self.model
+        self.model = model_id
+        logger.info(f"Local model switched: {old} → {model_id}")
+        return True
 
     async def chat(
         self,

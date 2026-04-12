@@ -53,6 +53,7 @@ async def post_init(application):
     llm = LLMRouter()
     llm.inject_db(db)
     await llm.load_active_model_from_db()
+    await llm.refresh_local_models()  # discover models from local endpoint
 
     # ── v2.5 explorers ──
     searcher = TavilySearch()

@@ -284,74 +284,7 @@ class CuriosityLoop:
                 body = ins.get("body", "")[:600]
                 hook = ins.get("hook_score", "?")
                 pub = "📤 publishable" if ins.get("publishable") else ""
-                ins_id = ins.get("id", "")
                 msg = f"💡 {title}\n\n{body}\n\nhook={hook} {pub}"
-                if ins_id:
-                    msg += f"\n\nid: {ins_id}\n(回覆此訊息 + /rate 1-5 [評語] 可評分)"
                 await self.telegram.notify(msg)
             except Exception:
                 pass
-
-    # ── /binge — drain N rounds back-to-back ──
-
-    async def binge(self, rounds: int = 15, trigger: str = "binge") -> dict:
-        """Run N curiosity loop rounds back-to-back.
-
-        Unlike the cron-driven loop, binge:
-        - tops up open_questions via Reflect+Hypothesize if the queue is short
-        - skips inter-round sleep
-        - ignores the daily hard cap (binge is explicitly user-triggered)
-        - still respects pause flag and stall detection
-        """
-        rounds = max(1, min(rounds, 20))
-        completed = 0
-        errors = 0
-
-        if await self.db.is_loop_paused():
-            return {"completed": 0, "errors": 0, "rounds": rounds, "status": "paused"}
-
-        # Top up question pool if it's smaller than the requested binge size
-        try:
-            pending_count = await self.db.count_pending_questions()
-            if pending_count < rounds:
-                logger.info(f"binge: only {pending_count} pending, seeding more")
-                memo = await self.reflector.reflect(trigger=f"{trigger}_seed")
-                await self.hypothesizer.hypothesize(memo)
-        except Exception as e:
-            logger.warning(f"binge initial seed failed: {e}")
-
-        for i in range(rounds):
-            if await self.db.is_loop_paused():
-                logger.info("binge: paused mid-run, exiting")
-                break
-            if self._stall_streak >= 3:
-                logger.warning("binge: stall streak hit, exiting")
-                break
-
-            pending = await self.db.get_pending_questions(limit=1)
-            if not pending:
-                # One more seed attempt before giving up
-                try:
-                    memo = await self.reflector.reflect(trigger=f"{trigger}_topup_{i+1}")
-                    await self.hypothesizer.hypothesize(memo)
-                    pending = await self.db.get_pending_questions(limit=1)
-                except Exception as e:
-                    logger.warning(f"binge topup at round {i+1} failed: {e}")
-
-            if not pending:
-                logger.info(f"binge: no more questions, ran {completed} of {rounds}")
-                break
-
-            try:
-                await self._run_one_round(pending[0])
-                completed += 1
-                if self.telegram and completed % 5 == 0:
-                    try:
-                        await self.telegram.notify(f"🔄 Binge: {completed}/{rounds} rounds done")
-                    except Exception:
-                        pass
-            except Exception as e:
-                logger.exception(f"binge round {i+1} failed: {e}")
-                errors += 1
-
-        return {"completed": completed, "errors": errors, "rounds": rounds, "status": "ok"}

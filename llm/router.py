@@ -7,19 +7,15 @@ Two tiers:
            high-quality writing, anything that needs long context + reasoning.
 
 The router exposes a unified `chat()` and `chat_json()` API that takes a `tier`
-argument. If tier="local" but the local server is unreachable (ConnectError,
-TimeoutError, etc), the router automatically falls back to REMOTE so the
-pipeline keeps working — at the cost of Sonnet tokens. Each fallback is logged
-and counted; check `/health` or `/status` to see the running total.
+argument. Token tracking is delegated to the underlying client.
 
 Backward-compat shim: older code that imported `LLMClient` from `llm/client.py`
-should now import `LLMRouter` from `llm/router.py`.
+should now import `LLMRouter` from `llm/router.py` and either pass `tier="remote"`
+explicitly or use the convenience methods.
 """
 
 import logging
 from typing import Literal
-
-import httpx
 
 from .local_client import LocalLLMClient, LocalLLMError
 from .remote_client import RemoteLLMClient, RemoteLLMError
@@ -38,10 +34,6 @@ class LLMRouter:
             logger.error(f"Remote client init failed: {e}")
             self.remote = None
 
-        # Track local→remote fallbacks so /health and /status can show this
-        self.local_fallback_count = 0
-        self.last_local_fallback_reason: str | None = None
-
     # ── Bookkeeping ──
 
     def inject_db(self, db):
@@ -57,6 +49,11 @@ class LLMRouter:
         return self.remote.active_model_name if self.remote else "local"
 
     def set_active_model(self, name: str) -> bool:
+        # Check local models first (by model ID)
+        cached = self.local.get_cached_models()
+        if name in cached:
+            return self.local.set_model(name)
+        # Then remote friendly names
         return self.remote.set_active_model(name) if self.remote else False
 
     def get_model_info(self) -> dict:
@@ -64,9 +61,20 @@ class LLMRouter:
             return self.remote.get_model_info()
         return {"name": "local", "model_id": self.local.model, "provider": "local"}
 
-    @staticmethod
-    def list_models() -> list[dict]:
-        return RemoteLLMClient.list_models() + [{"name": "local", "model_id": "local"}]
+    def list_models(self) -> list[dict]:
+        models = []
+        if self.remote:
+            models.extend(RemoteLLMClient.list_models())
+        # Add local models from endpoint discovery
+        for mid in self.local.get_cached_models():
+            models.append({"name": mid, "model_id": mid, "tier": "local"})
+        if not self.local.get_cached_models():
+            models.append({"name": "local", "model_id": self.local.model, "tier": "local"})
+        return models
+
+    async def refresh_local_models(self) -> list[str]:
+        """Fetch available models from the local endpoint."""
+        return await self.local.fetch_models()
 
     # ── Unified chat ──
 
@@ -75,32 +83,22 @@ class LLMRouter:
         agent: str,
         system_prompt: str,
         user_message: str,
-        tier: Tier = "local",
+        tier: Tier = "remote",
         max_tokens: int | None = None,
         json_mode: bool = False,
     ) -> str:
         if tier == "local":
             if not self.local.available:
-                logger.warning(f"[{agent}] LOCAL not configured, using REMOTE")
+                logger.warning(f"[{agent}] LOCAL not available, falling back to REMOTE")
                 tier = "remote"
             else:
-                try:
-                    return await self.local.chat(
-                        agent=agent,
-                        system_prompt=system_prompt,
-                        user_message=user_message,
-                        max_tokens=max_tokens,
-                        json_mode=json_mode,
-                    )
-                except (LocalLLMError, httpx.RequestError, httpx.HTTPError, OSError) as e:
-                    self.local_fallback_count += 1
-                    reason = f"{type(e).__name__}: {str(e)[:120]}"
-                    self.last_local_fallback_reason = reason
-                    logger.warning(
-                        f"[{agent}] LOCAL failed ({reason}), falling back to REMOTE "
-                        f"(total fallbacks this session: {self.local_fallback_count})"
-                    )
-                    # fall through to REMOTE below
+                return await self.local.chat(
+                    agent=agent,
+                    system_prompt=system_prompt,
+                    user_message=user_message,
+                    max_tokens=max_tokens,
+                    json_mode=json_mode,
+                )
         if not self.remote:
             raise RuntimeError("Remote LLM not available and local fallback exhausted")
         return await self.remote.chat(
@@ -116,23 +114,11 @@ class LLMRouter:
         agent: str,
         system_prompt: str,
         user_message: str,
-        tier: Tier = "local",
+        tier: Tier = "remote",
         max_tokens: int | None = None,
     ) -> dict | list:
         if tier == "local" and self.local.available:
-            try:
-                return await self.local.chat_json(
-                    agent, system_prompt, user_message, max_tokens=max_tokens,
-                )
-            except (LocalLLMError, httpx.RequestError, httpx.HTTPError, OSError) as e:
-                self.local_fallback_count += 1
-                reason = f"{type(e).__name__}: {str(e)[:120]}"
-                self.last_local_fallback_reason = reason
-                logger.warning(
-                    f"[{agent}] LOCAL json failed ({reason}), falling back to REMOTE "
-                    f"(total fallbacks this session: {self.local_fallback_count})"
-                )
-                # fall through to remote
+            return await self.local.chat_json(agent, system_prompt, user_message, max_tokens=max_tokens)
         if not self.remote:
             raise RuntimeError("Remote LLM not available")
         return await self.remote.chat_json(agent, system_prompt, user_message, max_tokens=max_tokens or 2048)

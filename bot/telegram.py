@@ -26,8 +26,6 @@ logger = logging.getLogger("lobster.bot")
 # Menu commands shown in Telegram (v3)
 MENU_COMMANDS = [
     BotCommand("start",     "Show all commands"),
-    BotCommand("health",    "Ping local + remote LLM + DB"),
-    BotCommand("memory",    "Show 48h chat memory (extracts + insights)"),
     # ── 探索控制 (v3)
     BotCommand("status",    "Curiosity loop status"),
     BotCommand("questions", "Show pending open_questions"),
@@ -79,8 +77,6 @@ class TelegramBot:
         self.app.add_handler(CommandHandler("model", self._cmd_model))
 
         # v3 NEW commands
-        self.app.add_handler(CommandHandler("health",    self._cmd_health))
-        self.app.add_handler(CommandHandler("memory",    self._cmd_memory))
         self.app.add_handler(CommandHandler("status",    self._cmd_status))
         self.app.add_handler(CommandHandler("questions", self._cmd_questions))
         self.app.add_handler(CommandHandler("inject",    self._cmd_inject))
@@ -119,9 +115,7 @@ class TelegramBot:
     async def _cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "🦞 Lobster v3.0 — 你的研究探索龍蝦\n\n"
-            "🏥 /health — ping local + remote LLM + DB\n"
-            "🧠 /memory — 看 chat 模式現在能 recall 的 48h 記憶\n"
-            "\n── 🔬 探索控制 ──\n"
+            "── 🔬 探索控制 ──\n"
             "📊 /status — 龍蝦現在在幹嘛\n"
             "❓ /questions — 目前的 open questions\n"
             "💉 /inject <問題> — 手動塞一個探索問題\n"
@@ -145,166 +139,6 @@ class TelegramBot:
         )
 
     # ── v3 NEW commands ──
-
-    async def _cmd_health(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Ping local + remote LLM + DB. Acks immediately, then runs probes in parallel."""
-        import asyncio
-        import time
-
-        # Immediate ack so the user knows we received the command
-        try:
-            placeholder = await update.message.reply_text("🏥 Running health check...")
-        except Exception as e:
-            logger.error(f"/health placeholder reply failed: {e}")
-            return
-
-        async def probe_local():
-            if not (self.llm and self.llm.local.available):
-                return ("LOCAL", None, None, "not_configured", "設 LOCAL_LLM_BASE_URL 才能用")
-            try:
-                t0 = time.monotonic()
-                reply = await asyncio.wait_for(
-                    self.llm.chat_local(
-                        agent="health",
-                        system_prompt="You are a connectivity test responder.",
-                        user_message="Reply with exactly one word: pong",
-                        max_tokens=10,
-                    ),
-                    timeout=10.0,
-                )
-                return ("LOCAL", self.llm.local.model, (time.monotonic() - t0) * 1000, "ok", reply)
-            except asyncio.TimeoutError:
-                return ("LOCAL", self.llm.local.model, None, "timeout", ">10s")
-            except Exception as e:
-                return ("LOCAL", self.llm.local.model, None, type(e).__name__, str(e)[:120])
-
-        async def probe_remote():
-            if not (self.llm and self.llm.remote):
-                return ("REMOTE", None, None, "not_configured", "OPENROUTER_API_KEY 沒設?")
-            info = self.llm.get_model_info()
-            label = f"{info['name']} ({info['model_id']})"
-            try:
-                t0 = time.monotonic()
-                reply = await asyncio.wait_for(
-                    self.llm.chat_remote(
-                        agent="health",
-                        system_prompt="You are a connectivity test responder.",
-                        user_message="Reply with exactly one word: pong",
-                        max_tokens=10,
-                    ),
-                    timeout=10.0,
-                )
-                return ("REMOTE", label, (time.monotonic() - t0) * 1000, "ok", reply)
-            except asyncio.TimeoutError:
-                return ("REMOTE", label, None, "timeout", ">10s")
-            except Exception as e:
-                return ("REMOTE", label, None, type(e).__name__, str(e)[:120])
-
-        async def probe_db():
-            if not self.db:
-                return ("DB", None, None, "not_connected", None)
-            try:
-                t0 = time.monotonic()
-                weights = await asyncio.wait_for(self.db.get_source_weights(), timeout=5.0)
-                dt_ms = (time.monotonic() - t0) * 1000
-                extras = {"source_weights": len(weights)}
-                try:
-                    extras["pending_q"] = await asyncio.wait_for(self.db.count_pending_questions(), timeout=3.0)
-                    extras["loops_today"] = await asyncio.wait_for(self.db.get_today_loop_count(), timeout=3.0)
-                except Exception as e:
-                    extras["v3_tables_error"] = f"{type(e).__name__} — schema_v3.sql 跑了嗎？"
-                return ("DB", "Supabase", dt_ms, "ok", extras)
-            except asyncio.TimeoutError:
-                return ("DB", "Supabase", None, "timeout", ">5s")
-            except Exception as e:
-                return ("DB", "Supabase", None, type(e).__name__, str(e)[:120])
-
-        async def probe_loop():
-            if not (self.loop and self.db):
-                return ("LOOP", None, None, "not_initialized", None)
-            try:
-                running = "running" if self.loop.running else "idle"
-                paused = await asyncio.wait_for(self.db.is_loop_paused(), timeout=3.0)
-                state = "⏸ paused" if paused else f"🏃 {running}"
-                return ("LOOP", "Curiosity loop", None, "ok", state)
-            except Exception as e:
-                return ("LOOP", "Curiosity loop", None, type(e).__name__, str(e)[:80])
-
-        # Run all four in parallel — total wall time ≈ slowest probe (~10s max)
-        try:
-            results = await asyncio.wait_for(
-                asyncio.gather(probe_local(), probe_remote(), probe_db(), probe_loop()),
-                timeout=15.0,
-            )
-        except asyncio.TimeoutError:
-            try:
-                await placeholder.edit_text("❌ /health timed out (>15s overall)")
-            except Exception:
-                pass
-            return
-        except Exception as e:
-            logger.exception("/health gather failed")
-            try:
-                await placeholder.edit_text(f"❌ /health crashed: {type(e).__name__}: {e}")
-            except Exception:
-                pass
-            return
-
-        # Format
-        lines = ["🏥 Health check\n"]
-
-        # Show local→remote fallback counter at the top
-        if self.llm:
-            n = getattr(self.llm, "local_fallback_count", 0)
-            if n > 0:
-                last = getattr(self.llm, "last_local_fallback_reason", "?")
-                lines.append(f"⚠️ LOCAL→REMOTE fallbacks this session: {n}")
-                lines.append(f"   last reason: {last}")
-                lines.append("")
-
-        for name, label, dt_ms, status, extra in results:
-            if status == "ok":
-                if name == "DB":
-                    lines.append(f"✅ {name}  {label} ({dt_ms:.0f}ms)")
-                    if isinstance(extra, dict):
-                        sw = extra.get("source_weights", "?")
-                        pq = extra.get("pending_q", "?")
-                        lt = extra.get("loops_today", "?")
-                        lines.append(f"   weights={sw}  pending_q={pq}  loops_today={lt}")
-                        if extra.get("v3_tables_error"):
-                            lines.append(f"   ⚠️ {extra['v3_tables_error']}")
-                elif name == "LOOP":
-                    lines.append(f"✅ {name}  {extra}")
-                else:
-                    got_pong = "pong" in (str(extra) or "").lower()
-                    mark = "✅" if got_pong else "⚠️"
-                    snippet = (str(extra) or "").strip()[:50]
-                    lines.append(f"{mark} {name}  {label}")
-                    lines.append(f"   {dt_ms:.0f}ms  reply: {snippet!r}")
-                    if not got_pong:
-                        lines.append("   (連上但沒回 pong — endpoint OK，prompt-following 弱)")
-            elif status == "not_configured":
-                lines.append(f"⚠️ {name}  not configured")
-                if extra:
-                    lines.append(f"   {extra}")
-            elif status in ("not_connected", "not_initialized"):
-                lines.append(f"❌ {name}  {status.replace('_', ' ')}")
-            elif status == "timeout":
-                lines.append(f"❌ {name}  {label or ''}  timeout {extra or ''}")
-            else:  # exception class name
-                lines.append(f"❌ {name}  {label or ''}")
-                lines.append(f"   {status}: {extra}")
-            lines.append("")  # spacer
-
-        text = "\n".join(lines).rstrip()
-        try:
-            await placeholder.edit_text(text)
-        except Exception as e:
-            logger.error(f"/health edit failed: {e}")
-            try:
-                await update.message.reply_text(text)
-            except Exception:
-                pass
 
     async def _cmd_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self.db:
@@ -386,42 +220,6 @@ class TelegramBot:
         text = await self.db.get_recent_digest_summary(days=2)
         await update.message.reply_text(f"📚 Recent digest (2d):\n\n{text}")
 
-    async def _cmd_memory(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Show what chat-mode can recall right now (48h extracts + insights).
-
-        Use this to verify the lobster's chat memory before assuming it's
-        hallucinating — if /memory shows the item, the bot SHOULD know it.
-        """
-        if not self.db:
-            await update.message.reply_text("DB not connected")
-            return
-        try:
-            extracts = await self.db.get_recent_extracts(days=2, limit=30)
-            insights = await self.db.get_recent_insights(days=2, limit=20)
-        except Exception as e:
-            await update.message.reply_text(f"❌ DB query failed: {type(e).__name__}: {e}")
-            return
-
-        lines = [f"🧠 Chat memory (48h)\n"]
-        lines.append(f"=== Extracts ({len(extracts)}) ===")
-        if not extracts:
-            lines.append("  (空 — 還沒有 forage 過任何東西)")
-        for e in extracts[:30]:
-            title = (e.get("title") or "?")[:100]
-            url = e.get("url") or "(no url)"
-            src = e.get("source_type") or "?"
-            lines.append(f"\n  [{src}] {title}\n  {url}")
-
-        lines.append(f"\n\n=== Insights ({len(insights)}) ===")
-        if not insights:
-            lines.append("  (空 — 還沒有產出任何 insight)")
-        for i in insights[:20]:
-            iid = i.get("id", "?")
-            title = (i.get("title") or "?")[:100]
-            lines.append(f"\n  {iid}\n  {title}")
-
-        await self._send_long(update, "\n".join(lines))
-
     async def _cmd_evolve(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self.evolver:
             await update.message.reply_text("❌ evolver not initialized")
@@ -483,48 +281,19 @@ class TelegramBot:
         await update.message.reply_text("▶️ Resumed. /inject 任何問題或等下次 seed。")
 
     async def _cmd_rate(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Two usages:
-          1. /rate <id> <1-5> [comment]
-          2. Reply to an insight notification + /rate <1-5> [comment]
-             — id is parsed from the replied message's text.
-        """
         args = context.args
-        target_id = None
-        rating_idx = 0  # index in args where rating starts
-
-        # Check reply-based usage first
-        rtm = update.message.reply_to_message
-        if rtm and rtm.text:
-            m = re.search(r"\bins_[0-9_a-zA-Z]+", rtm.text)
-            if m:
-                target_id = m.group(0)
-                rating_idx = 0  # /rate <1-5> [comment]
-
-        # Fall back to old /rate <id> <1-5> [comment] syntax
-        if not target_id:
-            if not args or len(args) < 2:
-                await update.message.reply_text(
-                    "Usage:\n"
-                    "  /rate <id> <1-5> [comment]\n"
-                    "或回覆一則 insight 通知 + /rate <1-5> [comment]"
-                )
-                return
-            target_id = args[0]
-            rating_idx = 1
-
-        if len(args) <= rating_idx:
-            await update.message.reply_text("Need a rating 1-5")
+        if not args or len(args) < 2:
+            await update.message.reply_text("Usage: /rate <id> <1-5> [comment]")
             return
-
+        target_id = args[0]
         try:
-            rating = int(args[rating_idx])
+            rating = int(args[1])
             assert 1 <= rating <= 5
         except (ValueError, AssertionError):
             await update.message.reply_text("Rating must be 1-5")
             return
-
-        comment = " ".join(args[rating_idx + 1:]) if len(args) > rating_idx + 1 else None
-
+        comment = " ".join(args[2:]) if len(args) > 2 else None
+        # Try insight first (id starts with ins_), else post
         try:
             if target_id.startswith("ins_"):
                 await self.db.rate_insight(target_id, rating, comment)
@@ -556,38 +325,6 @@ class TelegramBot:
         if not self.lobster:
             await update.message.reply_text("❌ Lobster agent not initialized")
             return
-
-        # If a URL is passed as an arg, route through inject_url first.
-        # /post <url> means "digest this URL into the v3 pipeline so I can post about it later".
-        if context.args:
-            url_arg = next((a for a in context.args if a.startswith("http")), None)
-            if url_arg:
-                if not self.loop:
-                    await update.message.reply_text("❌ curiosity loop not initialized")
-                    return
-                await update.message.reply_text(
-                    f"🔗 /post 帶了 URL — 我先 digest 這篇而不是抓 top discovery\n{url_arg[:80]}"
-                )
-                try:
-                    result = await self.loop.inject_url(url_arg)
-                    if result.get("status") == "ok":
-                        conn = result.get("connection") or {}
-                        n_ins = len(result.get("insights") or [])
-                        await update.message.reply_text(
-                            f"✅ Digested.\n"
-                            f"connection_type: {conn.get('connection_type')}\n"
-                            f"insight: {(conn.get('insight') or '')[:300]}\n"
-                            f"產出 insights: {n_ins}\n\n"
-                            f"再打 /post（不帶參數）可以從消化結果挑一個發 X/Threads。"
-                        )
-                    else:
-                        await update.message.reply_text(f"❌ {result.get('reason', 'digest failed')}")
-                except Exception as e:
-                    logger.exception("/post URL digest failed")
-                    await update.message.reply_text(f"❌ digest error: {type(e).__name__}: {e}")
-                return
-
-        # Default v2.5 behavior — pick top discovery and run publish pipeline
         await update.message.reply_text("🦞 Triggering post creation...")
         try:
             await self.lobster.create_post()
@@ -599,27 +336,61 @@ class TelegramBot:
         if not self.llm:
             await update.message.reply_text("❌ LLM not initialized")
             return
+
+        # /model refresh — re-fetch models from local endpoint
+        if context.args and context.args[0].lower() == "refresh":
+            models = await self.llm.refresh_local_models()
+            if models:
+                await update.message.reply_text(
+                    f"🔄 Local endpoint models:\n" + "\n".join(f"  • {m}" for m in models)
+                )
+            else:
+                await update.message.reply_text("❌ Could not fetch models from local endpoint")
+            return
+
         if not context.args:
             info = self.llm.get_model_info()
-            lines = [f"🤖 Current: {info['name']} ({info['model_id']})\n", "Available:"]
+            local_model = self.llm.local.model if self.llm.local else None
+            lines = [
+                f"🤖 Remote: {info['name']} ({info['model_id']})",
+                f"🖥 Local: {local_model}\n",
+                "── Remote ──",
+            ]
             for m in self.llm.list_models():
+                if m.get("tier") == "local":
+                    continue
                 marker = "▶" if m["name"] == info["name"] else " "
                 lines.append(f"{marker} {m['name']} — {m['model_id']}")
-            lines.append("\nUsage: /model <name>")
+            # Local models
+            local_models = self.llm.local.get_cached_models()
+            if local_models:
+                lines.append("\n── Local ──")
+                for mid in local_models:
+                    marker = "▶" if mid == local_model else " "
+                    lines.append(f"{marker} {mid}")
+            lines.append("\nUsage: /model <name> | /model refresh")
             await update.message.reply_text("\n".join(lines))
             return
+
         name = context.args[0].lower()
+        # Try local models first (exact match on model ID)
+        local_models = self.llm.local.get_cached_models()
+        if name in local_models:
+            self.llm.local.set_model(name)
+            await update.message.reply_text(f"✅ Local model → {name}")
+            return
+        # Then remote
         if self.llm.set_active_model(name):
-            await self.llm.remote.save_active_model_to_db() if self.llm.remote else None
+            if self.llm.remote:
+                await self.llm.remote.save_active_model_to_db()
             info = self.llm.get_model_info()
             await update.message.reply_text(f"✅ Switched to: {info['name']} ({info['model_id']})")
         else:
-            await update.message.reply_text(f"❌ Unknown model: {name}")
+            await update.message.reply_text(f"❌ Unknown model: {name}\nTry /model refresh to update available models")
 
     async def _cmd_binge(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """v3: drain N curiosity loop rounds back-to-back."""
-        if not self.loop:
-            await update.message.reply_text("❌ curiosity loop not initialized")
+        if not self.lobster:
+            await update.message.reply_text("❌ Lobster agent not initialized")
             return
         rounds = 15
         if context.args:
@@ -628,24 +399,18 @@ class TelegramBot:
             except ValueError:
                 await update.message.reply_text("Usage: /binge [rounds] (1-20, default 15)")
                 return
-        await update.message.reply_text(
-            f"🍽 Binge: 跑 {rounds} 輪 curiosity loop\n"
-            f"先 reflect+hypothesize 補滿問題池，然後 drain。背景跑，完成會通知。"
-        )
+        await update.message.reply_text(f"🍽 Binge exploring: {rounds} rounds")
 
         import asyncio
 
         async def run_binge():
             try:
-                result = await self.loop.binge(rounds)
+                result = await self.lobster.binge_explore(rounds)
                 await self.notify(
-                    f"✅ Binge done!\n"
-                    f"完成: {result['completed']}/{result['rounds']} 輪\n"
-                    f"錯誤: {result.get('errors', 0)}"
+                    f"✅ Binge done!\n完成: {result['completed']}/{result['rounds']} 輪"
                 )
             except Exception as e:
-                logger.exception("binge failed")
-                await self.notify(f"❌ Binge failed: {type(e).__name__}: {e}")
+                await self.notify(f"❌ Binge failed: {e}")
 
         asyncio.create_task(run_binge())
 
@@ -674,81 +439,6 @@ class TelegramBot:
         reason = " ".join(context.args[1:]) if len(context.args) > 1 else None
         await self.db.add_tracked_handle(handle, reason)
         await update.message.reply_text(f"✅ Now tracking @{handle}")
-
-    # ── Helpers ──
-
-    async def _send_long(self, update: Update, text: str, chunk_size: int = 3500):
-        """Split long text on paragraph boundaries and send as multiple Telegram messages.
-
-        Telegram's hard limit is 4096 chars; we use 3500 for safety margin.
-        Tries paragraph boundaries first, falls back to line, then hard split.
-        """
-        if not text:
-            return
-        if len(text) <= chunk_size:
-            await update.message.reply_text(text)
-            return
-
-        chunks = []
-        remaining = text
-        while len(remaining) > chunk_size:
-            split_at = remaining.rfind("\n\n", 0, chunk_size)
-            if split_at == -1 or split_at < chunk_size // 2:
-                split_at = remaining.rfind("\n", 0, chunk_size)
-            if split_at == -1 or split_at < chunk_size // 2:
-                split_at = remaining.rfind("。", 0, chunk_size)
-            if split_at == -1 or split_at < chunk_size // 2:
-                split_at = chunk_size
-            chunks.append(remaining[:split_at].rstrip())
-            remaining = remaining[split_at:].lstrip()
-        if remaining:
-            chunks.append(remaining)
-
-        total = len(chunks)
-        for i, c in enumerate(chunks, 1):
-            prefix = f"({i}/{total}) " if total > 1 else ""
-            try:
-                await update.message.reply_text(prefix + c)
-            except Exception as e:
-                logger.error(f"_send_long chunk {i}/{total} failed: {e}")
-
-    @staticmethod
-    def _extract_keywords(text: str) -> list[str]:
-        """Pull plausible search keywords out of a user message.
-
-        Splits on whitespace + Chinese punctuation, drops stopwords and very
-        short or very long chunks. Used to pre-match against extracts/insights.
-        """
-        chunks = re.split(r"[\s,.!?;:，。！？；：、（）()「」『』《》<>\"'`/\\\[\]{}]+", text)
-        stop = {
-            "的", "了", "是", "在", "我", "你", "他", "她", "我們", "你們", "他們",
-            "這", "那", "這個", "那個", "什麼", "怎麼", "為什麼", "嗎", "吧", "啊",
-            "有", "沒有", "可以", "請", "幫", "想", "要", "覺得", "感覺", "剛剛",
-            "the", "a", "an", "and", "or", "but", "for", "of", "to", "in", "on",
-            "with", "from", "by", "as", "is", "are", "was", "were", "be", "this",
-            "that", "these", "those",
-        }
-        out = []
-        for c in chunks:
-            c = c.strip()
-            if 2 <= len(c) <= 25 and c.lower() not in stop:
-                out.append(c)
-        return out[:15]
-
-    @staticmethod
-    def _match_items(keywords: list[str], items: list[dict], fields: list[str], max_hits: int = 5) -> list[dict]:
-        """Score items by keyword overlap against given fields, return top max_hits."""
-        if not keywords or not items:
-            return []
-        kws = [k.lower() for k in keywords]
-        scored = []
-        for it in items:
-            haystack = " ".join(str(it.get(f, "") or "") for f in fields).lower()
-            hits = sum(1 for k in kws if k in haystack)
-            if hits > 0:
-                scored.append((hits, it))
-        scored.sort(key=lambda x: x[0], reverse=True)
-        return [it for _, it in scored[:max_hits]]
 
     # ── Message handling ──
 
@@ -781,170 +471,30 @@ class TelegramBot:
                 await update.message.reply_text(f"❌ URL inject error: {e}")
             return
 
-        # Natural language chat — with conversation memory + reply context + DB-grounded recall
+        # Natural language chat
         if self.llm and self.lobster:
             try:
                 from utils.identity_loader import load_identity
                 identity = await load_identity(self.db)
-
-                # Pull per-user sliding-window history (last 6 turns = 12 messages)
-                history = context.user_data.setdefault("chat_history", [])
-
-                # Pull the lobster's RECENT MEMORY from DB so it can ground replies
-                # in real foraged content instead of hallucinating URLs/titles.
-                memory_block = ""
-                matched_block = ""
-                try:
-                    recent_extracts = await self.db.get_recent_extracts(days=2, limit=30)
-                    recent_insights = await self.db.get_recent_insights(days=2, limit=20)
-                    logger.info(
-                        f"chat memory fetched: {len(recent_extracts)} extracts, "
-                        f"{len(recent_insights)} insights"
-                    )
-
-                    # Step 1: keyword-match the user message against titles/bodies
-                    # Surface top hits at the TOP of the prompt with a strong directive,
-                    # so the LLM doesn't have to find them lost-in-middle.
-                    keywords = self._extract_keywords(text)
-                    matched_extracts = self._match_items(
-                        keywords, recent_extracts,
-                        fields=["title", "one_liner"], max_hits=5,
-                    )
-                    matched_insights = self._match_items(
-                        keywords, recent_insights,
-                        fields=["title", "body"], max_hits=5,
-                    )
-
-                    if matched_extracts or matched_insights:
-                        m_lines = ["\n\n[⭐ 重要：以下是 Salmon 訊息裡 keyword 命中的項目，"
-                                   "他多半就是在問這些。URL 跟 title 都是真實的，直接引用]\n"]
-                        if matched_extracts:
-                            m_lines.append("=== 命中的 extracts ===")
-                            for e in matched_extracts:
-                                title = (e.get("title") or "?")[:200]
-                                url = e.get("url") or "(no url)"
-                                one = (e.get("one_liner") or "")[:200]
-                                src = e.get("source_type") or "?"
-                                m_lines.append(f"\n  [{src}] {title}\n    URL: {url}\n    {one}")
-                        if matched_insights:
-                            m_lines.append("\n\n=== 命中的 insights ===")
-                            for i in matched_insights:
-                                iid = i.get("id", "")
-                                title = (i.get("title") or "?")[:200]
-                                body = (i.get("body") or "")[:400]
-                                m_lines.append(f"\n  ({iid}) {title}\n    {body}")
-                        m_lines.append("\n[/⭐命中區結束]\n")
-                        matched_block = "\n".join(m_lines)
-                        logger.info(
-                            f"chat keyword match: {len(matched_extracts)} extracts, "
-                            f"{len(matched_insights)} insights from kws={keywords[:5]}"
-                        )
-
-                    # Step 2: full memory block as fallback context
-                    if recent_extracts or recent_insights:
-                        ext_lines = []
-                        for e in recent_extracts:
-                            title = (e.get("title") or "?")[:120]
-                            url = e.get("url") or "(no url)"
-                            one = (e.get("one_liner") or "")[:120]
-                            src = e.get("source_type") or "?"
-                            ext_lines.append(f"  [{src}] {title}\n    URL: {url}\n    {one}")
-                        ins_lines = []
-                        for i in recent_insights:
-                            iid = i.get("id", "")
-                            title = (i.get("title") or "?")[:120]
-                            body = (i.get("body") or "")[:200]
-                            ins_lines.append(f"  ({iid}) {title}\n    {body}")
-                        memory_block = (
-                            "\n\n[你最近 48 小時內自己 forage + digest 出來的所有東西。"
-                            "這些 URL 跟 title 都是真實的，可以直接引用]\n\n"
-                            "=== 全部 extracts ===\n"
-                            + ("\n\n".join(ext_lines) if ext_lines else "  (none)")
-                            + "\n\n=== 全部 insights ===\n"
-                            + ("\n\n".join(ins_lines) if ins_lines else "  (none)")
-                            + "\n[/記憶區結束]\n"
-                        )
-                except Exception as e:
-                    logger.exception(f"chat memory fetch failed: {e}")
-
-                # If user is replying to a specific bot message in Telegram,
-                # inject that message as load-bearing context.
-                replied_to_block = ""
-                rtm = update.message.reply_to_message
-                if rtm and rtm.text:
-                    replied_to_block = (
-                        "\n\n[使用者用 Telegram 的「回覆」功能引了你之前發的這則訊息，"
-                        "他現在的話是針對這則的回應/延伸：]\n"
-                        f"{rtm.text[:1500]}\n"
-                        "[/引用結束]\n"
-                    )
-
                 system = (
                     f"{identity}\n\n"
-                    "你現在在跟你的主人 Salmon 用 Telegram 聊天。\n"
+                    "你現在在跟你的主人用 Telegram 聊天。\n"
                     "用繁體中文回覆，語氣自然口語，保持你的個性風格。\n"
-                    "回覆要完整，不要在句子中間停。但也不要硬撐長度——夠了就停。\n"
-                    "\n"
-                    "幾條硬規則（很重要）：\n"
-                    "1. 下面 [⭐命中區] 是用 Salmon 的 keyword 在你的記憶裡 grep 過的結果。\n"
-                    "   **如果命中區有東西，你 99% 就是在被問這些**。直接引用裡面的 title 跟 URL。\n"
-                    "2. 你 chat 模式下沒有即時搜尋工具，但 [⭐命中區] 跟 [記憶區] 裡所有的 URL、\n"
-                    "   title、one-liner 都是你自己最近 48 小時內 forage 出來的，**全部是真實的**。\n"
-                    "3. 如果命中區是空的、記憶區也找不到，誠實說：『我最近沒 forage 那個，\n"
-                    "   要我用 /inject <關鍵字> 真的去找嗎？』然後給一個具體的 inject 指令。\n"
-                    "   絕對不要編 URL / title / PMID / arXiv ID / 作者名字。\n"
-                    "   寧可說「我不記得」也不要瞎猜。Yang et al. 2019 那種編造是嚴重失誤。\n"
-                    "4. Salmon 說「這個」「那個」「剛剛那篇」時，先看 [使用者正在回覆這則] 區塊，\n"
-                    "   再看 [⭐命中區]，再看對話歷史，再看 [記憶區]。找不到就直接問「你指的是哪則？」\n"
-                    "5. 如果 Salmon 引了 insight 通知（裡面有 id: ins_xxx），用那個 id 在記憶區\n"
-                    "   找到對應的 source URL。\n"
-                    f"{matched_block}"
-                    f"{memory_block}"
-                    f"{replied_to_block}"
+                    "回覆簡短（100字以內），不用正式開場白或結尾。"
                 )
-
-                # Flatten history into a single user message with role labels
-                history_text_parts = []
-                for h in history[-12:]:
-                    role_label = "Salmon" if h["role"] == "user" else "你（Lobster）"
-                    history_text_parts.append(f"{role_label}: {h['content']}")
-                history_block = "\n\n".join(history_text_parts)
-
-                if history_block:
-                    user_msg = (
-                        "以下是你跟 Salmon 最近的對話（最舊在上）：\n\n"
-                        f"{history_block}\n\n"
-                        f"Salmon 現在說：{text}\n\n"
-                        "你的回覆："
-                    )
-                else:
-                    user_msg = f"Salmon 說：{text}\n\n你的回覆："
-
-                reply = await self.llm.chat(
-                    agent="lobster_chat",
-                    system_prompt=system,
-                    user_message=user_msg,
-                    tier="local",       # default to local gpt-oss-120b — only Connect uses remote
-                    max_tokens=2500,
-                )
-                reply = (reply or "").strip()
-                if not reply:
-                    reply = "（空白回覆 — model 可能 timeout 或 max_tokens 撐不住，再講一次？）"
-
-                # Telegram 4096 char hard limit — auto-split long replies
-                await self._send_long(update, reply)
-
-                # Persist exchange (cap at last 12 messages)
-                history.append({"role": "user", "content": text})
-                history.append({"role": "assistant", "content": reply})
-                if len(history) > 12:
-                    del history[: len(history) - 12]
-
+                reply = await self.llm.chat("lobster", system, text, max_tokens=300)
+                await update.message.reply_text(reply.strip())
             except Exception as e:
-                logger.exception("Chat reply failed")
-                await update.message.reply_text(
-                    f"❌ Chat error: {type(e).__name__}: {str(e)[:200]}"
-                )
+                logger.error(f"Chat reply failed: {e}")
+                if self.db:
+                    await self.db.insert_discovery(
+                        source_type="thought",
+                        title=text[:80],
+                        summary=text,
+                        content_type="thought",
+                        interest_score=5,
+                    )
+                    await update.message.reply_text("💭 Stored as thought.")
         elif self.db:
             await self.db.insert_discovery(
                 source_type="thought",
