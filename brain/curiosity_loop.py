@@ -100,8 +100,9 @@ class CuriosityLoop:
 
         if self.telegram:
             try:
+                # Let truncate_for_telegram (4096) handle length — don't pre-cut at 500
                 await self.telegram.notify(
-                    f"🧠 Seed ({trigger})\n\n{memo[:500]}\n\n→ {len(questions)} 個新問題"
+                    f"🧠 Seed ({trigger})\n\n{memo}\n\n→ {len(questions)} 個新問題"
                 )
             except Exception:
                 pass
@@ -281,7 +282,7 @@ class CuriosityLoop:
         for ins in insights:
             try:
                 title = ins.get("title", "(insight)")
-                body = ins.get("body", "")[:600]
+                body = ins.get("body", "")  # no pre-truncation — telegram layer caps at 4096
                 hook = ins.get("hook_score", "?")
                 pub = "📤 publishable" if ins.get("publishable") else ""
 

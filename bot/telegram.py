@@ -221,11 +221,33 @@ class TelegramBot:
         if not self.app or not self.app.bot:
             logger.warning("Bot not initialized, can't send notification")
             return
-        text = truncate_for_telegram(text)
-        try:
-            await self.app.bot.send_message(chat_id=self.owner_id, text=text)
-        except Exception as e:
-            logger.error(f"Telegram notify failed: {e}")
+        # Split long messages at paragraph boundaries instead of silently truncating
+        for chunk in self._split_for_telegram(text):
+            try:
+                await self.app.bot.send_message(chat_id=self.owner_id, text=chunk)
+            except Exception as e:
+                logger.error(f"Telegram notify failed: {e}")
+                return
+
+    @staticmethod
+    def _split_for_telegram(text: str, max_len: int = 3900) -> list[str]:
+        """Split text at paragraph boundaries so Telegram's 4096 limit doesn't eat content."""
+        if len(text) <= max_len:
+            return [text]
+        chunks = []
+        remaining = text
+        while len(remaining) > max_len:
+            # Prefer splitting at double newline, then single newline, then hard cut
+            split_at = remaining.rfind("\n\n", 0, max_len)
+            if split_at < max_len // 2:
+                split_at = remaining.rfind("\n", 0, max_len)
+            if split_at < max_len // 2:
+                split_at = max_len
+            chunks.append(remaining[:split_at].rstrip())
+            remaining = remaining[split_at:].lstrip()
+        if remaining:
+            chunks.append(remaining)
+        return chunks
 
     # ── Commands ──
 
@@ -584,12 +606,18 @@ class TelegramBot:
                 if result.get("status") == "ok":
                     n_ins = len(result.get("insights") or [])
                     conn = result.get("connection") or {}
-                    await update.message.reply_text(
+                    insight_text = conn.get('insight') or ''
+                    # Show produced insight titles + bodies if any
+                    ins_summary = ""
+                    for ins in (result.get("insights") or [])[:3]:
+                        ins_summary += f"\n\n💡 {ins.get('title', '')}\n{ins.get('body', '')}"
+                    msg = (
                         f"✅ Digested.\n"
-                        f"connection_type: {conn.get('connection_type')}\n"
-                        f"insight: {(conn.get('insight') or '')[:300]}\n"
-                        f"產出 insights: {n_ins}"
+                        f"connection_type: {conn.get('connection_type')}\n\n"
+                        f"{insight_text}\n"
+                        f"{ins_summary}"
                     )
+                    await update.message.reply_text(truncate_for_telegram(msg))
                 else:
                     await update.message.reply_text(f"❌ {result.get('reason', 'failed')}")
             except Exception as e:
