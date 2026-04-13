@@ -249,8 +249,10 @@ class Lobster:
             results["threads"] = threads_result
 
         # Link twin posts
-        if results["x"] and results["threads"]:
-            await self.db.link_twin_posts(results["x"], results["threads"])
+        x_post_id = results["x"]["post_id"] if results.get("x") else None
+        threads_post_id = results["threads"]["post_id"] if results.get("threads") else None
+        if x_post_id and threads_post_id:
+            await self.db.link_twin_posts(x_post_id, threads_post_id)
 
         await self.db.mark_discovery_selected(discovery_id)
 
@@ -354,14 +356,20 @@ class Lobster:
 
             # === PUBLISH ===
             post_platform_id = None
+            platform_url = None
             posted_text = draft.strip()
 
             if platform == "x" and self.x_poster:
                 result = await self.x_poster.post_tweet(posted_text, url=discovery.get("url"))
                 post_platform_id = result.get("tweet_id")
+                platform_url = result.get("url")
             elif platform == "threads" and self.threads_poster:
                 result = await self.threads_poster.post(posted_text)
                 post_platform_id = result
+                # Construct Threads URL if handle is configured
+                handle = os.environ.get("THREADS_HANDLE", "").lstrip("@")
+                if post_platform_id and handle:
+                    platform_url = f"https://www.threads.net/@{handle}/post/{post_platform_id}"
 
             # Save to DB
             post_id = await self.db.insert_post(
@@ -382,7 +390,12 @@ class Lobster:
                 f"Published to {platform}: hook={hook_score}, "
                 f"critic={critic_quality}, post_id={post_id}"
             )
-            return post_id
+            return {
+                "post_id": post_id,
+                "text": posted_text,
+                "url": platform_url,
+                "platform_post_id": post_platform_id,
+            }
 
         except Exception as e:
             logger.error(f"Write/publish failed for {platform}: {e}")
@@ -767,22 +780,37 @@ class Lobster:
         return ""
 
     async def _notify_post_results(self, discovery, results):
-        """Send Telegram notification about published posts."""
+        """Send Telegram notification about published posts — include full text + URLs."""
         parts = [f"🦞 New discovery published:"]
-        parts.append(f"📌 {discovery.get('title', 'N/A')[:60]}")
+        parts.append(f"📌 {discovery.get('title', 'N/A')[:80]}")
+        if discovery.get("url"):
+            parts.append(f"🔗 Source: {discovery['url']}")
 
-        if results.get("x"):
-            parts.append(f"\n🐦 X (en) ✅")
-        elif results.get("x") is None and os.environ.get("THREADS_ENABLED") != "true":
-            pass  # X-only mode, no need to show
-        else:
-            parts.append(f"\n🐦 X ❌")
-
+        x_res = results.get("x")
+        threads_res = results.get("threads")
         threads_enabled = os.environ.get("THREADS_ENABLED", "false").lower() == "true"
+
+        # X section
+        if x_res:
+            parts.append(f"\n━━━ 🐦 X (en) ✅ ━━━")
+            if x_res.get("url"):
+                parts.append(f"🔗 {x_res['url']}")
+            parts.append(x_res.get("text", ""))
+        elif x_res is None and not threads_enabled:
+            pass  # X-only mode disabled, skip
+        elif x_res is None:
+            pass  # X skipped this round (daily cap)
+        else:
+            parts.append(f"\n🐦 X ❌ failed")
+
+        # Threads section
         if threads_enabled:
-            if results.get("threads"):
-                parts.append(f"🧵 Threads (zh) ✅")
+            if threads_res:
+                parts.append(f"\n━━━ 🧵 Threads (zh) ✅ ━━━")
+                if threads_res.get("url"):
+                    parts.append(f"🔗 {threads_res['url']}")
+                parts.append(threads_res.get("text", ""))
             else:
-                parts.append(f"🧵 Threads ❌")
+                parts.append(f"\n🧵 Threads ❌ failed")
 
         await self.telegram.notify("\n".join(parts))
