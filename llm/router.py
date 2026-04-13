@@ -83,7 +83,7 @@ class LLMRouter:
         agent: str,
         system_prompt: str,
         user_message: str,
-        tier: Tier = "remote",
+        tier: Tier = "local",
         max_tokens: int | None = None,
         json_mode: bool = False,
     ) -> str:
@@ -114,7 +114,7 @@ class LLMRouter:
         agent: str,
         system_prompt: str,
         user_message: str,
-        tier: Tier = "remote",
+        tier: Tier = "local",
         max_tokens: int | None = None,
     ) -> dict | list:
         if tier == "local" and self.local.available:
