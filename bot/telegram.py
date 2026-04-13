@@ -468,23 +468,30 @@ class TelegramBot:
         if not context.args:
             info = self.llm.get_model_info()
             local_model = self.llm.local.model if self.llm.local else None
+            local_available = bool(self.llm.local and self.llm.local.available)
             lines = [
-                f"🤖 Remote: {info['name']} ({info['model_id']})",
-                f"🖥 Local: {local_model}\n",
-                "── Remote ──",
+                f"💬 Chat 預設: 🖥 LOCAL ({local_model})"
+                + ("  ✅" if local_available else "  ⚠️ local endpoint 沒回應，會 fallback 到 remote"),
+                f"🧠 Connect / Mirror: 🌐 REMOTE ({info['name']})",
+                "",
+                "── 🖥 Local (chat + 大部分 agent 用這個) ──",
             ]
+            local_models = self.llm.local.get_cached_models()
+            if local_models:
+                for mid in local_models:
+                    marker = "▶" if mid == local_model else " "
+                    lines.append(f"{marker} {mid}")
+            else:
+                lines.append(f"▶ {local_model}  (沒跑過 /model refresh，僅顯示預設)")
+
+            lines.append("")
+            lines.append("── 🌐 Remote (只給 Connect 深度推理用) ──")
             for m in self.llm.list_models():
                 if m.get("tier") == "local":
                     continue
                 marker = "▶" if m["name"] == info["name"] else " "
                 lines.append(f"{marker} {m['name']} — {m['model_id']}")
-            # Local models
-            local_models = self.llm.local.get_cached_models()
-            if local_models:
-                lines.append("\n── Local ──")
-                for mid in local_models:
-                    marker = "▶" if mid == local_model else " "
-                    lines.append(f"{marker} {mid}")
+
             lines.append("\nUsage: /model <name> | /model refresh")
             await update.message.reply_text("\n".join(lines))
             return
