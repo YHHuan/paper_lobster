@@ -1,2 +1,2 @@
-web: lobster gateway
-worker: lobster loop
+web: python -m lobster.cli gateway
+worker: python -m lobster.cli loop
