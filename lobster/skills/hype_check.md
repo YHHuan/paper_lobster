@@ -1,3 +1,9 @@
+---
+name: hype_check
+description: 看到一個很紅的東西但我覺得被高估了
+type: prompt-fragment
+---
+
 # Skill: Hype Check
 
 ## 觸發條件

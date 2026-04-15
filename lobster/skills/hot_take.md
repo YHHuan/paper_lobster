@@ -1,3 +1,9 @@
+---
+name: hot_take
+description: 看到主流共識但我有不同角度
+type: prompt-fragment
+---
+
 # Skill: 觀點輸出
 
 ## 觸發條件

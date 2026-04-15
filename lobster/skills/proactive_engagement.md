@@ -1,3 +1,9 @@
+---
+name: proactive_engagement
+description: 探索時看到追蹤的人或大號發了我有想法的東西
+type: prompt-fragment
+---
+
 # Skill: 主動參與對話
 
 ## 觸發條件

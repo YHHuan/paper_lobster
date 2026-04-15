@@ -1,1 +1,2 @@
-web: python main.py
+web: lobster gateway
+worker: lobster loop

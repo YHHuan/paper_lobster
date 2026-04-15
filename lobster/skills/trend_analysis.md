@@ -1,3 +1,9 @@
+---
+name: trend_analysis
+description: 某個話題在 AI/tech/醫學圈突然很多人在討論
+type: prompt-fragment
+---
+
 # Skill: 趨勢分析
 
 ## 觸發條件

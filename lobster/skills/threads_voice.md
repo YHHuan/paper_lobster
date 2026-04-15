@@ -1,3 +1,9 @@
+---
+name: threads_voice
+description: 所有要發到 Threads 的內容都要走這個 skill。
+type: prompt-fragment
+---
+
 # Skill: Threads 中文聲音
 
 ## 什麼時候用

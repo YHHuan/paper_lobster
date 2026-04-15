@@ -1,3 +1,9 @@
+---
+name: today_i_learned
+description: 發現一個事實/概念/歷史，是真的讓我驚訝的
+type: prompt-fragment
+---
+
 # Skill: 今天學到
 
 ## 觸發條件

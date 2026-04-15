@@ -1,3 +1,9 @@
+---
+name: reply_engagement
+description: 有人 reply 我的推文，或 mention 我
+type: prompt-fragment
+---
+
 # Skill: 回覆互動
 
 ## 觸發條件

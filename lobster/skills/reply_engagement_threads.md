@@ -1,3 +1,9 @@
+---
+name: reply_engagement_threads
+description: - 語氣更輕鬆
+type: prompt-fragment
+---
+
 # Skill: Threads 回覆互動
 
 ## 跟 X 版的差異

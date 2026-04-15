@@ -1,73 +1,73 @@
-# Lobster v3.0 — Curiosity-Driven Research Explorer
+# Lobster v4
 
-## What it is
+Lobster's curiosity brain running on Hermes Agent plumbing.
 
-A digital lobster that thinks, explores, digests research papers, and evolves.
-Not an RSS reader. Not a paper alert. A curious research partner.
+v4 is a merge of:
+- **Lobster v3** — the research agent (curiosity loop, digester, evolve, Telegram bot).
+- **Hermes Agent** (Nous Research) — general agent framework for gateway + memory + routing.
 
-Core loop: Reflect → Hypothesize → Forage → Digest → Evolve → (sometimes) Publish
+The Lobster brain is preserved as-is under `lobster/`. Hermes lives read-only
+under `vendor/hermes-agent-main/`. Integration happens via thin shims in
+`lobster/bridge/`.
 
-## What it does on its own
+## Run locally
 
-| Time | Behavior |
-|------|----------|
-| 06:00 | Morning Seed — reflect on recent learning, generate today's questions |
-| 06:15-17:59 | Curiosity Loop — forage / digest / connect on open questions. No questions = sleep. |
-| 09:30 | Morning Engagement — X/Threads mentions and replies |
-| 12:00 | Midday Create — post if there's a publishable insight |
-| 15:30 | Afternoon Engagement |
-| 18:00 | Evening Seed — second reflection, humanities/cross-domain bias |
-| 22:00 | Nightly Reflection — update memory.md, Telegram daily summary |
-| Sun 23:00 | Weekly Mirror + Evolve proposals |
+```bash
+pip install -e .
+pip install -e vendor/hermes-agent-main   # optional; only if you set LOBSTER_USE_HERMES=1
 
-0-10 loops/day depending on how curious the lobster is. No forced posting.
+# minimum env
+export TELEGRAM_BOT_TOKEN=...
+export TELEGRAM_CHAT_ID=...
+export ALLOWED_USER_ID=...            # same as TELEGRAM_CHAT_ID for solo use
+# optional email channel
+export SMTP_HOST=smtp.gmail.com SMTP_PORT=587 SMTP_USER=... SMTP_PASS=... SMTP_FROM=...
+# optional hermes routing (off by default)
+export LOBSTER_USE_HERMES=1
 
-## What it pushes to you
+lobster gateway   # Telegram + Email inbound/outbound
+lobster loop      # background curiosity scheduler
+```
 
-### Daily (automatic)
+## Processes (Railway)
 
-- **Insight notifications**: research insights with a one-liner
-- **Publish request**: hook score >= 7 → "should I post this?"
-- **Daily summary**: loops run, articles read, what it learned, cost
+See `Procfile`:
 
-### Weekly (automatic)
+```
+web: lobster gateway
+worker: lobster loop
+```
 
-- **Evolution proposals**: source reweighting, new frontiers, deprecations
-- **Knowledge growth report**: what clusters grew
+## `LOBSTER_USE_HERMES`
 
-## What you can do
+- **unset / `0`** — pure v3 behaviour. Telegram bot + heartbeats exactly as before.
+- **`1`** — bridge modules try to route through Hermes (gateway, smart model routing,
+  memory manager). Anywhere the Hermes API isn't yet wired they fall back to v3.
+  Always safe to toggle on/off.
 
-| Command | Purpose | When |
-|---------|---------|------|
-| `/menu` | This table | Forgot what's available |
-| `/status` | Loop status | Curious about activity |
-| `/questions` | Pending questions | See what it's thinking |
-| `/inject <q>` | Push a question | Want it to research something |
-| `/explore <topic>` | Quick search | Ad-hoc curiosity |
-| `/knowledge <topic>` | Cluster understanding | Check what it knows |
-| `/digest` | Latest digest | See recent learning |
-| `/evolve` | Trigger evolve now | Don't want to wait for Sunday |
-| `/stats` | Monthly statistics | Check spending |
-| `/pause` | Pause loop | Save tokens |
-| `/resume` | Resume | Unpause |
-| `/rate <id> <1-5> <note>` | Rate insight | Train the lobster's taste |
-| `/track <handle>` | Track X account | Found someone worth following |
-| Paste URL | Immediately digest | Found something interesting |
-| Type text | Chat with lobster | Random thoughts |
+## Layout
 
-## Cost
+```
+lobster/
+  bridge/           # v3 ↔ hermes adapters (gateway, llm, memory, skills_loader)
+  commands/         # thin /command wrappers
+  bot/              # v3 Telegram bot (still authoritative in phase 1)
+  brain/            # curiosity loop, reflect, hypothesize, knowledge state
+  digester/         # extract / connect / synthesize
+  agent_logic/      # mirror, evolve, lobster persona
+  identity/         # soul.md, memory.md, style.md, curiosity.md
+  skills/           # prompt-fragment skill files (agentskills.io-style frontmatter)
+  scheduler/        # heartbeat.py — legacy setup_heartbeats + new run_forever
+  config/lobster.yaml
+vendor/hermes-agent-main/   # read-only
+```
 
-| Item | Monthly |
-|------|---------|
-| Local LLM (gpt-oss-b) | $0 |
-| Remote LLM (Sonnet, Connect only) | ~$7.50 |
-| APIs (PubMed, bioRxiv, arXiv, Tavily, Jina) | $0 |
-| Railway | ~$5 |
-| **Total** | **~$12.50/mo** |
+## Config
 
-## What the lobster will NOT do
+`lobster/config/lobster.yaml` — default local model, remote connect model,
+gateway platforms, loop hours, memory mode, cost budget. Override via env where
+documented inline.
 
-- Change soul.md Core Identity or Active Projects without your approval
-- Publish without your consent
-- Pretend it understands (low-confidence connections are marked as such)
-- Run loops for the sake of running (no questions = no loops)
+## Status
+
+See `MIGRATION_TODO.md` for what's still stubbed.

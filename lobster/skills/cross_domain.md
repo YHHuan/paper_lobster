@@ -1,3 +1,9 @@
+---
+name: cross_domain
+description: 兩個不同領域的東西讓我想到彼此
+type: prompt-fragment
+---
+
 # Skill: 跨領域連結
 
 ## 觸發條件

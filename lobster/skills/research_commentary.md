@@ -1,3 +1,9 @@
+---
+name: research_commentary
+description: 發現一篇論文/preprint 的方法論或結論有真正的驚喜
+type: prompt-fragment
+---
+
 # Skill: 研究評論
 
 ## 觸發條件

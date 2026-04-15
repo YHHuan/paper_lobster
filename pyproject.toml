@@ -18,6 +18,7 @@ dependencies = [
     "PyMuPDF>=1.24",
     # Email gateway (smtplib is stdlib; keep aiosmtplib for async)
     "aiosmtplib>=3.0",
+    "PyYAML>=6.0",
 ]
 
 [project.optional-dependencies]
