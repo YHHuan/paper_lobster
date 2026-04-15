@@ -1,0 +1,54 @@
+## Lobster v4 default config
+## Edit these values to tune behaviour. Everything has a sane default so
+## you can leave anything you haven't thought about yet.
+
+llm:
+  # Default local model served by the local LLM endpoint.
+  # Used for chat, curiosity loop, digest, reflect — everything except Connect.
+  default_local_model: "gemma-4"
+  # Connect/deep-research upgrades to remote. Set to null to disable.
+  connect_remote_model: "claude-sonnet-4-5"
+  # Endpoint of the local OpenAI-compatible server.
+  local_endpoint: "http://localhost:1234/v1"
+
+gateway:
+  # Which delivery platforms to enable. Telegram + Email only by default.
+  platforms: ["telegram", "email"]
+  telegram:
+    # Token comes from TELEGRAM_BOT_TOKEN env var. Chat id from TELEGRAM_CHAT_ID.
+    enabled: true
+  email:
+    enabled: true
+    to: "michaelyhhuang@gmail.com"
+    # SMTP creds come from env: SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM.
+    # For Gmail use app-password (not normal password).
+
+loop:
+  # Curiosity loop tuning — these matched v3 behaviour that you liked.
+  max_loops_per_day: 10
+  idle_cooldown_min: 15
+  morning_seed_hour: 6
+  evening_seed_hour: 18
+  nightly_reflection_hour: 22
+  midday_create_hour: 12
+  # 0 = off. Exploration works well in v3 so keep its knobs unchanged here.
+  explore_aggressiveness: 1.0
+
+publisher:
+  # Hook score threshold for asking "should I post this?"
+  hook_publish_threshold: 7
+  require_approval: true
+
+debug:
+  # Observability toggles — logs go to data/lobster-debug.log
+  trace_llm_calls: true
+  trace_loop_decisions: true
+  trace_hermes_bridge: true
+  cost_budget_daily_usd: 0.50
+  cost_alert_platform: "telegram"
+
+memory:
+  # How to bridge into Hermes memory. "lobster" = keep our own identity/ dir.
+  #                                    "hermes"  = route everything through hermes MemoryManager.
+  #                                    "both"    = write-through (recommended during migration)
+  mode: "both"

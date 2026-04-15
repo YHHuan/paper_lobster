@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lobster"
+version = "4.0.0a1"
+description = "Lobster v4 — curiosity-driven research agent, built on Hermes internals"
+requires-python = ">=3.11"
+dependencies = [
+    # Lobster original deps
+    "httpx>=0.27",
+    "python-telegram-bot[job-queue,webhooks]>=21.0",
+    "APScheduler>=3.10,<4.0",
+    "python-dotenv>=1.0",
+    "feedparser>=6.0",
+    "tweepy>=4.14",
+    "PyMuPDF>=1.24",
+    # Email gateway (smtplib is stdlib; keep aiosmtplib for async)
+    "aiosmtplib>=3.0",
+]
+
+[project.optional-dependencies]
+hermes = [
+    # Install Hermes Agent as editable from vendored path:
+    # pip install -e ./vendor/hermes-agent-main
+    # Then enable: LOBSTER_USE_HERMES=1
+]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.5",
+]
+
+[project.scripts]
+lobster = "lobster.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["lobster*"]
+exclude = ["vendor*", "tests*", "data*"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"

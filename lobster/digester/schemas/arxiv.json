@@ -1,0 +1,13 @@
+{
+  "type": "methods_paper",
+  "fields": [
+    "novelty_claim",
+    "method_description",
+    "baselines_compared",
+    "limitations_stated",
+    "code_available",
+    "relevance_to_clinical",
+    "salmon_relevance",
+    "one_liner"
+  ]
+}

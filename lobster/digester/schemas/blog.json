@@ -1,0 +1,12 @@
+{
+  "type": "opinion_piece",
+  "fields": [
+    "central_claim",
+    "evidence_cited",
+    "author_credibility",
+    "counterarguments_addressed",
+    "actionability",
+    "salmon_relevance",
+    "one_liner"
+  ]
+}
