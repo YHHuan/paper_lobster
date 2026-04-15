@@ -80,6 +80,7 @@ class TelegramBot:
         self.app.add_handler(CommandHandler("relearn", self._cmd_relearn))
         self.app.add_handler(CommandHandler("binge", self._cmd_binge))
         self.app.add_handler(CommandHandler("model", self._cmd_model))
+        self.app.add_handler(CommandHandler("testemail", self._cmd_testemail))
 
         # v3 NEW commands
         self.app.add_handler(CommandHandler("status",    self._cmd_status))
@@ -533,6 +534,15 @@ class TelegramBot:
             await update.message.reply_text(f"✅ Switched to: {info['name']} ({info['model_id']})")
         else:
             await update.message.reply_text(f"❌ Unknown model: {name}\nTry /model refresh to update available models")
+
+    async def _cmd_testemail(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        from lobster.bridge.gateway import send_email_notification
+        await update.message.reply_text("📧 Sending test email…")
+        ok = await send_email_notification(
+            "Lobster v4 SMTP test",
+            "If you are reading this, the email gateway works. 🦞",
+        )
+        await update.message.reply_text("✅ sent" if ok else "❌ failed (check logs)")
 
     async def _cmd_binge(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self.lobster:
