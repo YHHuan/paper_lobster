@@ -60,24 +60,18 @@ async def _send_email(cfg: dict, subject: str, body: str) -> bool:
         return False
 
 
-async def _run_lobster_fallback() -> None:
-    """Fallback path: run the existing v3 Telegram bot + scheduler in-process."""
-    # Delegates to the known-good legacy entry point. This preserves v3 behaviour
-    # 1:1 so we don't regress while the hermes integration matures.
+def _run_lobster_fallback_sync() -> None:
+    """Fallback path: run the existing v3 Telegram bot + scheduler on main thread.
+    PTB's Application.run_webhook installs signal handlers so it MUST be on the
+    main thread — do not wrap in asyncio.to_thread."""
     from lobster import _legacy_main
-    # _legacy_main.main() is sync (uses Application.run_polling/run_webhook),
-    # so run it in a thread to keep run_gateway awaitable.
-    await asyncio.to_thread(_legacy_main.main)
+    _legacy_main.main()
 
 
-async def _run_hermes_gateway(cfg: dict) -> None:
+def _run_hermes_gateway_sync(cfg: dict) -> None:
     """Attempt to start hermes-native gateway. If API surface is missing,
     fall back to the lobster v3 path so the bot is never offline."""
     try:
-        # TODO hermes-native: wire vendor/hermes-agent-main/gateway/run.py once
-        # we know the exact start signature + platform config dict shape.
-        # The hermes gateway entry expects its own YAML config; we'd need a
-        # translation layer from lobster.yaml → hermes gateway config here.
         import importlib
         importlib.import_module("gateway.run")  # smoke import
         logger.warning(
@@ -86,18 +80,19 @@ async def _run_hermes_gateway(cfg: dict) -> None:
         )
     except Exception as e:
         logger.warning(f"Hermes gateway unavailable ({e}); using v3 fallback")
-    await _run_lobster_fallback()
+    _run_lobster_fallback_sync()
 
 
-async def run_gateway() -> None:
-    """Start message gateway (Telegram + Email). Main CLI entry."""
+def run_gateway_sync() -> None:
+    """Start message gateway (Telegram + Email). Main CLI entry. Runs on main
+    thread — PTB owns its own event loop + signal handlers."""
     cfg = _load_config()
     logger.info(f"Gateway config: platforms={cfg.get('gateway', {}).get('platforms')} "
                 f"hermes={_use_hermes()}")
     if _use_hermes():
-        await _run_hermes_gateway(cfg)
+        _run_hermes_gateway_sync(cfg)
     else:
-        await _run_lobster_fallback()
+        _run_lobster_fallback_sync()
 
 
 # Convenience helper so other modules can push an email notification

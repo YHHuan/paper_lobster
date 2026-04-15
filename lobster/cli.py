@@ -30,8 +30,8 @@ def _setup_logging() -> None:
 
 
 def _cmd_gateway(_args) -> int:
-    from lobster.bridge.gateway import run_gateway
-    asyncio.run(run_gateway())
+    from lobster.bridge.gateway import run_gateway_sync
+    run_gateway_sync()
     return 0
 
 
@@ -57,6 +57,11 @@ def _cmd_chat(_args) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     _setup_logging()
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except Exception:
+        pass
     parser = argparse.ArgumentParser(prog="lobster", description="Lobster v4 research agent")
     sub = parser.add_subparsers(dest="cmd")
 
