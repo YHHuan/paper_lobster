@@ -260,6 +260,28 @@ class Lobster:
         if self.telegram:
             await self._notify_post_results(discovery, results)
 
+    async def _pick_override_variant(self) -> tuple[str, dict]:
+        """P1 variant picker. Returns (variant_label, overrides_by_target).
+
+        Coin-flips 50/50 between A (no override, baseline) and B (apply active
+        overrides). Only flips when at least one target has a B-variant active;
+        otherwise degrades to A with empty dict.
+        """
+        overrides_B: dict[str, dict] = {}
+        for target in ("writer", "editor", "critic", "hook"):
+            try:
+                ov = await self.db.get_active_override(target=target, variant="B")
+            except Exception as e:
+                logger.warning(f"Failed to load {target} override: {e}")
+                ov = None
+            if ov:
+                overrides_B[target] = ov
+        if not overrides_B:
+            return "A", {}
+        if random.random() < 0.5:
+            return "B", overrides_B
+        return "A", {}
+
     async def _write_and_publish(
         self, discovery, source_text, research, skill, platform, language
     ) -> str | None:
@@ -267,8 +289,25 @@ class Lobster:
 
         Returns post_id in DB or None if failed.
         """
-        # Build prompt
-        identity = await load_identity(self.db, include_skill=skill, platform=platform)
+        # === P1: pick A/B variant for this post ===
+        variant, overrides = await self._pick_override_variant()
+        override_ids = {t: ov["id"] for t, ov in overrides.items()} if overrides else None
+        if overrides:
+            ov_versions = {t: f"v{ov['version']}" for t, ov in overrides.items()}
+            logger.info(f"Post variant={variant} with overrides: {ov_versions}")
+
+        # Build prompt (with writer override if variant B)
+        writer_ov = overrides.get("writer")
+        identity = await load_identity(
+            self.db,
+            include_skill=skill,
+            platform=platform,
+            override_text=writer_ov["content"] if writer_ov else None,
+            override_label=(
+                f"WRITER OVERRIDE v{writer_ov['version']} variant {variant}"
+                if writer_ov else None
+            ),
+        )
         length_guide = CREATE_POST_LENGTH.get(platform, CREATE_POST_LENGTH["x"])
         system = f"{identity}\n\n---\n\n{CREATE_POST_PROMPT.format(length_guide=length_guide)}"
 
@@ -285,9 +324,15 @@ class Lobster:
                 return None
 
             # === CRITIC: Review the draft ===
+            critic_ov = overrides.get("critic")
             critique = await run_critic(
                 self.llm, self.db, draft, source_text,
                 platform=platform, language=language, skill=skill,
+                override_text=critic_ov["content"] if critic_ov else None,
+                override_label=(
+                    f"CRITIC OVERRIDE v{critic_ov['version']} variant {variant}"
+                    if critic_ov else None
+                ),
             )
 
             critic_verdict = critique.get("verdict", "publish")
@@ -295,34 +340,70 @@ class Lobster:
 
             if critic_verdict == "kill":
                 logger.info(f"Critic killed draft (quality={critic_quality})")
+                # P4: persist killed draft so /override can revive it
+                killed_post_id = None
+                try:
+                    killed_post_id = await self.db.insert_killed_post(
+                        platform=platform,
+                        skill_used=skill,
+                        draft_text=draft,
+                        language=language,
+                        discovery_id=str(discovery["id"]) if discovery.get("id") else None,
+                        kill_reason={
+                            "verdict": critic_verdict,
+                            "overall_quality": critic_quality,
+                            "issues": critique.get("issues", []),
+                            "suggestions": critique.get("suggestions", []),
+                            "hook_assessment": critique.get("hook_assessment"),
+                            "originality": critique.get("originality"),
+                        },
+                        override_variant=variant,
+                        override_ids=override_ids,
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to persist killed draft: {e}")
+
                 if self.telegram:
                     issues = critique.get("issues", [])
+                    revive_hint = f"\nRevive with: /override {killed_post_id}" if killed_post_id else ""
                     await self.telegram.notify(
                         f"🚫 Critic killed draft ({platform}):\n"
                         f"Quality: {critic_quality}/10\n"
                         f"Issues: {'; '.join(issues[:2])}\n"
-                        f"Draft: {draft[:60]}..."
+                        f"Draft: {draft[:60]}...{revive_hint}"
                     )
                 return None
 
             # === EDITOR: Revise if critic says so ===
             if critic_verdict == "revise" or critic_quality < 7:
+                editor_ov = overrides.get("editor")
                 draft = await run_editor(
                     self.llm, self.db, draft, critique,
                     source_text, length_guide,
+                    override_text=editor_ov["content"] if editor_ov else None,
+                    override_label=(
+                        f"EDITOR OVERRIDE v{editor_ov['version']} variant {variant}"
+                        if editor_ov else None
+                    ),
                 )
 
             # === QUALITY GATES (kept from v2.5) ===
 
             # Hook strength check
-            hook_score, hook_reason = await evaluate_hook(draft, language, self.llm)
+            hook_ov = overrides.get("hook")
+            hook_override_text = hook_ov["content"] if hook_ov else None
+            hook_score, hook_reason = await evaluate_hook(
+                draft, language, self.llm, override_text=hook_override_text,
+            )
             if hook_score < 7:
                 rewrite_msg = (
                     f"The hook scored {hook_score}/10: {hook_reason}\n"
                     f"Rewrite with a stronger opening. Original:\n{draft}"
                 )
                 draft = await self.llm.chat("lobster", system, rewrite_msg, max_tokens=1024)
-                hook_score, hook_reason = await evaluate_hook(draft, language, self.llm)
+                hook_score, hook_reason = await evaluate_hook(
+                    draft, language, self.llm, override_text=hook_override_text,
+                )
                 if hook_score < 7:
                     logger.info(f"Hook still weak after rewrite ({hook_score}), dropping")
                     if self.telegram:
@@ -384,6 +465,9 @@ class Lobster:
                 x_post_id=post_platform_id if platform == "x" else None,
                 threads_post_id=post_platform_id if platform == "threads" else None,
                 posted_at=datetime.utcnow().isoformat(),
+                override_variant=variant,
+                override_ids=override_ids,
+                status="published",
             )
 
             logger.info(

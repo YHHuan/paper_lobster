@@ -181,6 +181,9 @@ class Database:
         x_post_id: str = None,
         threads_post_id: str = None,
         posted_at: str = None,
+        override_variant: str = None,
+        override_ids: dict = None,
+        status: str = None,
     ) -> str:
         data = {
             "platform": platform,
@@ -195,6 +198,9 @@ class Database:
         if x_post_id: data["x_post_id"] = x_post_id
         if threads_post_id: data["threads_post_id"] = threads_post_id
         if posted_at: data["posted_at"] = posted_at
+        if override_variant: data["override_variant"] = override_variant
+        if override_ids: data["override_ids"] = override_ids
+        if status: data["status"] = status
 
         row = await self._insert("posts", data)
         return str(row["id"])
@@ -746,6 +752,173 @@ class Database:
             "local_tokens_used": sum(r.get("local_tokens_used") or 0 for r in rows),
             "remote_tokens_used": sum(r.get("remote_tokens_used") or 0 for r in rows),
         }
+
+    # ── prompt_overrides (P1 + P4) ──
+
+    OVERRIDE_TARGETS = ("writer", "editor", "critic", "hook")
+
+    async def insert_prompt_override(
+        self,
+        target: str,
+        content: str,
+        derived_from: dict,
+        *,
+        variant: str = "B",
+        status: str = "dry_run",
+        baseline_engagement: float = None,
+        notes: str = None,
+    ) -> dict:
+        if target not in self.OVERRIDE_TARGETS:
+            raise ValueError(f"invalid override target: {target}")
+        existing = await self._select("prompt_overrides", {
+            "select": "version",
+            "target": f"eq.{target}",
+            "variant": f"eq.{variant}",
+            "order": "version.desc",
+            "limit": "1",
+        })
+        next_ver = (existing[0]["version"] + 1) if existing else 1
+        data = {
+            "target": target,
+            "variant": variant,
+            "version": next_ver,
+            "content": content,
+            "derived_from": derived_from,
+            "status": status,
+        }
+        if baseline_engagement is not None:
+            data["baseline_engagement"] = baseline_engagement
+        if notes:
+            data["notes"] = notes
+        return await self._insert("prompt_overrides", data)
+
+    async def get_active_override(self, target: str, variant: str = "B") -> Optional[dict]:
+        rows = await self._select("prompt_overrides", {
+            "select": "*",
+            "target": f"eq.{target}",
+            "variant": f"eq.{variant}",
+            "status": "eq.active",
+            "order": "version.desc",
+            "limit": "1",
+        })
+        return rows[0] if rows else None
+
+    async def list_prompt_overrides(
+        self,
+        *,
+        status: str = None,
+        target: str = None,
+        limit: int = 50,
+    ) -> list[dict]:
+        params = {"select": "*", "order": "created_at.desc", "limit": str(limit)}
+        if status:
+            params["status"] = f"eq.{status}"
+        if target:
+            params["target"] = f"eq.{target}"
+        return await self._select("prompt_overrides", params)
+
+    async def activate_override(self, override_id: str) -> bool:
+        current = await self._select("prompt_overrides", {
+            "select": "id,target,variant",
+            "id": f"eq.{override_id}",
+            "limit": "1",
+        })
+        if not current:
+            return False
+        target = current[0]["target"]
+        variant = current[0]["variant"]
+        now = datetime.utcnow().isoformat()
+        await self._update(
+            "prompt_overrides",
+            {"target": target, "variant": variant, "status": "active"},
+            {"status": "superseded", "superseded_at": now},
+        )
+        await self._update(
+            "prompt_overrides",
+            {"id": override_id},
+            {"status": "active"},
+        )
+        return True
+
+    async def rollback_override(self, override_id: str, note: str = None):
+        now = datetime.utcnow().isoformat()
+        patch = {"status": "rolled_back", "superseded_at": now}
+        if note:
+            patch["notes"] = note
+        await self._update("prompt_overrides", {"id": override_id}, patch)
+
+    async def record_override_validation(
+        self,
+        override_id: str,
+        validation_engagement: float,
+        validated: bool,
+    ):
+        now = datetime.utcnow().isoformat()
+        patch = {
+            "validation_engagement": validation_engagement,
+            "validated_at": now,
+            "status": "validated" if validated else "rolled_back",
+        }
+        await self._update("prompt_overrides", {"id": override_id}, patch)
+
+    # ── posts: critic kill + override plumbing (P1 + P4) ──
+
+    async def insert_killed_post(
+        self,
+        *,
+        platform: str,
+        skill_used: str,
+        draft_text: str,
+        language: str,
+        discovery_id: str = None,
+        kill_reason: dict,
+        override_variant: str = "A",
+        override_ids: dict = None,
+    ) -> str:
+        """Record a draft that the Critic killed — lets P4 /override revive it."""
+        data = {
+            "platform": platform,
+            "skill_used": skill_used,
+            "draft_text": draft_text,
+            "language": language,
+            "status": "killed_by_critic",
+            "killed_at": datetime.utcnow().isoformat(),
+            "kill_reason": kill_reason,
+            "override_variant": override_variant,
+        }
+        if discovery_id:
+            data["discovery_id"] = discovery_id
+        if override_ids:
+            data["override_ids"] = override_ids
+        row = await self._insert("posts", data)
+        return str(row["id"])
+
+    async def get_killed_post(self, post_id: str) -> Optional[dict]:
+        rows = await self._select("posts", {
+            "select": "*",
+            "id": f"eq.{post_id}",
+            "limit": "1",
+        })
+        return rows[0] if rows else None
+
+    async def mark_human_override(self, post_id: str, note: str = None):
+        patch = {
+            "status": "human_override",
+            "human_override_at": datetime.utcnow().isoformat(),
+        }
+        if note:
+            patch["human_override_note"] = note
+        await self._update("posts", {"id": post_id}, patch)
+
+    async def list_killed_posts(self, days: int = 7, limit: int = 20) -> list[dict]:
+        since = (datetime.utcnow() - timedelta(days=days)).isoformat()
+        return await self._select("posts", {
+            "select": "id,platform,skill_used,draft_text,killed_at,kill_reason,discovery_id",
+            "status": "eq.killed_by_critic",
+            "killed_at": f"gte.{since}",
+            "order": "killed_at.desc",
+            "limit": str(limit),
+        })
 
     # ── evolution_proposals ──
 

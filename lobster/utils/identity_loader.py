@@ -16,13 +16,22 @@ IDENTITY_DIR = Path(__file__).parent.parent / "identity"
 SKILLS_DIR = Path(__file__).parent.parent / "skills"
 
 
-async def load_identity(db, include_skill: str = None, platform: str = None) -> str:
+async def load_identity(
+    db,
+    include_skill: str = None,
+    platform: str = None,
+    *,
+    override_text: str = None,
+    override_label: str = None,
+) -> str:
     """Build full system prompt from files + DB.
 
     Args:
         db: Database instance (for reading identity_state).
         include_skill: Skill name to append (e.g. "research_commentary").
         platform: "x" or "threads" — affects voice skill.
+        override_text: Optional P1 prompt_override content appended at the tail.
+        override_label: Label shown before the override block (e.g. "WRITER OVERRIDE v3 variant B").
 
     Returns:
         Complete system prompt string.
@@ -68,5 +77,10 @@ async def load_identity(db, include_skill: str = None, platform: str = None) -> 
             parts.append(skill_path.read_text(encoding="utf-8").strip())
         else:
             logger.warning(f"Skill file missing: {skill_path}")
+
+    # 5. Prompt override (P1) — appended last so it takes precedence over earlier guidance
+    if override_text:
+        label = override_label or "PROMPT OVERRIDE"
+        parts.append(f"## {label}\n\n{override_text.strip()}")
 
     return "\n\n---\n\n".join(parts)

@@ -17,6 +17,7 @@ import os
 import re
 import json
 import logging
+from datetime import datetime
 
 from telegram import Update, BotCommand
 from telegram.ext import (
@@ -50,6 +51,13 @@ MENU_COMMANDS = [
     BotCommand("rate",      "Rate insight/post: /rate <id> <1-5> [comment]"),
     BotCommand("pause",     "Pause curiosity loop + auto-posting"),
     BotCommand("resume",    "Resume curiosity loop + auto-posting"),
+    # ── Evolution v5
+    BotCommand("prompt_override",   "Generate writer/editor/critic/hook deltas (dry-run; add 'activate' to go live)"),
+    BotCommand("overrides",         "List active + dry-run prompt overrides"),
+    BotCommand("activate_override", "/activate_override <id> — promote dry_run to active"),
+    BotCommand("rollback_override", "/rollback_override <id> [reason] — mark as rolled_back"),
+    BotCommand("override",          "/override <post_id> — revive a Critic-killed draft"),
+    BotCommand("killed",            "Show recent Critic-killed drafts (for /override)"),
 ]
 
 
@@ -89,6 +97,14 @@ class TelegramBot:
         self.app.add_handler(CommandHandler("knowledge", self._cmd_knowledge))
         self.app.add_handler(CommandHandler("digest",    self._cmd_digest))
         self.app.add_handler(CommandHandler("evolve",    self._cmd_evolve))
+
+        # Evolution v5 commands (P1 + P4)
+        self.app.add_handler(CommandHandler("prompt_override",    self._cmd_prompt_override))
+        self.app.add_handler(CommandHandler("overrides",          self._cmd_overrides))
+        self.app.add_handler(CommandHandler("activate_override",  self._cmd_activate_override))
+        self.app.add_handler(CommandHandler("rollback_override",  self._cmd_rollback_override))
+        self.app.add_handler(CommandHandler("override",           self._cmd_override))
+        self.app.add_handler(CommandHandler("killed",             self._cmd_killed))
 
         # URL + natural language
         self.app.add_handler(MessageHandler(
@@ -375,6 +391,202 @@ class TelegramBot:
             )
         except Exception as e:
             await update.message.reply_text(f"❌ Evolve failed: {e}")
+
+    # ── Evolution v5: prompt_overrides (P1) + revive killed drafts (P4) ──
+
+    async def _cmd_prompt_override(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """/prompt_override [activate] — run P1 diff now. Defaults to dry-run."""
+        if not self.evolver:
+            await update.message.reply_text("❌ evolver not initialized")
+            return
+        activate = bool(context.args and context.args[0].lower() in ("activate", "live"))
+        await update.message.reply_text(
+            f"🧪 Running prompt_override { '(ACTIVATE mode)' if activate else '(dry-run)' }..."
+        )
+        try:
+            result = await self.evolver.run_prompt_override(activate=activate)
+            status = result.get("status")
+            if status == "skipped":
+                await update.message.reply_text(
+                    f"⏭ Skipped: {result.get('reason')} (posts with engagement: {result.get('count', 0)})"
+                )
+            elif status == "failed":
+                await update.message.reply_text(f"❌ Failed: {result.get('error', 'unknown')}")
+            else:
+                created = result.get("created") or []
+                await update.message.reply_text(
+                    f"✅ Done. {len(created)} override(s) stored as "
+                    f"{'active' if activate else 'dry_run'}. "
+                    f"Top/bot baseline: {result.get('top_baseline'):.1f} / "
+                    f"{result.get('bottom_baseline'):.1f}"
+                )
+        except Exception as e:
+            logger.error(f"prompt_override failed: {e}", exc_info=True)
+            await update.message.reply_text(f"❌ prompt_override failed: {e}")
+
+    async def _cmd_overrides(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """/overrides — list active + dry_run prompt_overrides."""
+        if not self.db:
+            await update.message.reply_text("❌ DB not connected")
+            return
+        try:
+            rows = await self.db.list_prompt_overrides(limit=30)
+        except Exception as e:
+            await update.message.reply_text(f"❌ Query failed: {e}")
+            return
+        if not rows:
+            await update.message.reply_text("(沒有任何 prompt_override)")
+            return
+        by_status = {"active": [], "dry_run": [], "validated": [], "superseded": [], "rolled_back": []}
+        for r in rows:
+            by_status.setdefault(r["status"], []).append(r)
+        lines = ["🧪 Prompt overrides:"]
+        for st in ("active", "dry_run", "validated", "superseded", "rolled_back"):
+            bucket = by_status.get(st) or []
+            if not bucket:
+                continue
+            lines.append(f"\n— {st} ({len(bucket)}) —")
+            for r in bucket[:8]:
+                content_preview = (r.get("content") or "")[:90].replace("\n", " ")
+                lines.append(
+                    f"  [{r['id'][:8]}] {r['target']} v{r['version']} variant {r['variant']} "
+                    f"baseline={r.get('baseline_engagement')}"
+                )
+                lines.append(f"    {content_preview}")
+        lines.append("\nActivate: /activate_override <id>")
+        lines.append("Rollback: /rollback_override <id>")
+        await update.message.reply_text("\n".join(lines)[:4000])
+
+    async def _cmd_activate_override(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """/activate_override <id> — promote dry_run to active (supersedes prior)."""
+        if not (context.args and self.db):
+            await update.message.reply_text("Usage: /activate_override <override_id>")
+            return
+        override_id = context.args[0]
+        try:
+            ok = await self.db.activate_override(override_id)
+        except Exception as e:
+            await update.message.reply_text(f"❌ Failed: {e}")
+            return
+        if not ok:
+            await update.message.reply_text(f"❌ No override with id={override_id}")
+            return
+        await update.message.reply_text(f"✅ Activated {override_id[:8]} — next post uses this in variant B (50/50 A/B split).")
+
+    async def _cmd_rollback_override(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """/rollback_override <id> — mark as rolled_back."""
+        if not (context.args and self.db):
+            await update.message.reply_text("Usage: /rollback_override <override_id> [reason]")
+            return
+        override_id = context.args[0]
+        reason = " ".join(context.args[1:]) if len(context.args) > 1 else None
+        try:
+            await self.db.rollback_override(override_id, note=reason)
+        except Exception as e:
+            await update.message.reply_text(f"❌ Failed: {e}")
+            return
+        await update.message.reply_text(f"✅ Rolled back {override_id[:8]}")
+
+    async def _cmd_override(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """/override <killed_post_id> [note] — revive a Critic-killed draft (P4)."""
+        if not (context.args and self.db and self.lobster):
+            await update.message.reply_text(
+                "Usage: /override <post_id>\n"
+                "(post_id 來自 Critic killed 通知訊息)"
+            )
+            return
+        post_id = context.args[0]
+        note = " ".join(context.args[1:]) if len(context.args) > 1 else None
+        try:
+            post = await self.db.get_killed_post(post_id)
+        except Exception as e:
+            await update.message.reply_text(f"❌ DB failed: {e}")
+            return
+        if not post:
+            await update.message.reply_text(f"❌ Not found: {post_id}")
+            return
+        if post.get("status") != "killed_by_critic":
+            await update.message.reply_text(
+                f"⚠️ Post {post_id[:8]} status={post.get('status')}; "
+                f"only killed_by_critic drafts can be revived."
+            )
+            return
+
+        platform = post.get("platform")
+        draft_text = post.get("draft_text") or ""
+        await update.message.reply_text(
+            f"🔧 Reviving killed draft ({platform}):\n{draft_text[:200]}...\nPublishing now..."
+        )
+        try:
+            # Publish raw (skip Critic since user overrode it)
+            published_url = None
+            post_platform_id = None
+            if platform == "x" and getattr(self.lobster, "x_poster", None):
+                result = await self.lobster.x_poster.post_tweet(draft_text)
+                post_platform_id = result.get("tweet_id")
+                published_url = result.get("url")
+            elif platform == "threads" and getattr(self.lobster, "threads_poster", None):
+                post_platform_id = await self.lobster.threads_poster.post(draft_text)
+            else:
+                await update.message.reply_text(f"❌ No poster wired for platform={platform}")
+                return
+
+            # Update post row: status=human_override, write actual platform id
+            patch = {
+                "status": "human_override",
+                "human_override_at": datetime.utcnow().isoformat(),
+                "posted_text": draft_text,
+                "posted_at": datetime.utcnow().isoformat(),
+            }
+            if note:
+                patch["human_override_note"] = note
+            if post_platform_id:
+                if platform == "x":
+                    patch["x_post_id"] = post_platform_id
+                else:
+                    patch["threads_post_id"] = post_platform_id
+            await self.db._update("posts", {"id": post_id}, patch)
+            reply_bits = [f"✅ Published via override: {post_id[:8]}"]
+            if published_url:
+                reply_bits.append(published_url)
+            await update.message.reply_text("\n".join(reply_bits))
+        except Exception as e:
+            logger.error(f"/override failed for {post_id}: {e}", exc_info=True)
+            await update.message.reply_text(f"❌ Publish failed: {e}")
+
+    async def _cmd_killed(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """/killed — list recent critic-killed drafts (for /override)."""
+        if not self.db:
+            await update.message.reply_text("❌ DB not connected")
+            return
+        days = 7
+        if context.args:
+            try:
+                days = int(context.args[0])
+            except ValueError:
+                pass
+        try:
+            rows = await self.db.list_killed_posts(days=days, limit=15)
+        except Exception as e:
+            await update.message.reply_text(f"❌ Query failed: {e}")
+            return
+        if not rows:
+            await update.message.reply_text(f"(過去 {days} 天沒有 killed draft)")
+            return
+        lines = [f"🚫 Killed drafts (last {days}d, {len(rows)}):"]
+        for r in rows:
+            reason = (r.get("kill_reason") or {}) or {}
+            issues = reason.get("issues") or []
+            issue_str = issues[0][:60] if issues else reason.get("verdict", "?")
+            preview = (r.get("draft_text") or "")[:80].replace("\n", " ")
+            lines.append(
+                f"\n[{r['id']}] {r.get('platform')} skill={r.get('skill_used')} "
+                f"killed={r.get('killed_at', '')[:16]}"
+                f"\n  reason: {issue_str}"
+                f"\n  draft: {preview}..."
+            )
+        lines.append("\nRevive with: /override <post_id>")
+        await update.message.reply_text("\n".join(lines)[:4000])
 
     # ── v2.5 commands (kept) ──
 

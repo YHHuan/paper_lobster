@@ -27,13 +27,20 @@ Consider:
 Respond in JSON: {"score": <int>, "reason": "<one sentence>"}"""
 
 
-async def evaluate_hook(draft: str, language: str, llm_client) -> tuple[int, str]:
+async def evaluate_hook(
+    draft: str,
+    language: str,
+    llm_client,
+    *,
+    override_text: str = None,
+) -> tuple[int, str]:
     """Evaluate hook strength of a draft.
 
     Args:
         draft: The full draft text.
         language: "zh" or "en".
         llm_client: LLMClient instance.
+        override_text: Optional P1 hook override appended to EVAL_PROMPT.
 
     Returns:
         (score, reason): score 1-10, reason string.
@@ -41,10 +48,14 @@ async def evaluate_hook(draft: str, language: str, llm_client) -> tuple[int, str
     # Take first 2 sentences or 150 chars, whichever is shorter
     opening = draft[:150]
 
+    system_prompt = EVAL_PROMPT
+    if override_text:
+        system_prompt = f"{EVAL_PROMPT}\n\n## HOOK OVERRIDE\n\n{override_text.strip()}"
+
     user_msg = f"Language: {language}\n\nOpening to evaluate:\n{opening}"
 
     try:
-        result = await llm_client.chat_json("lobster", EVAL_PROMPT, user_msg)
+        result = await llm_client.chat_json("lobster", system_prompt, user_msg)
         score = int(result.get("score", 5))
         reason = result.get("reason", "")
         score = max(1, min(10, score))

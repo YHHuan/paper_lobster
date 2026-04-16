@@ -43,6 +43,7 @@ async def post_init(application):
     from lobster.digester.connect import Connector
     from lobster.digester.synthesize import Synthesizer
     from lobster.publisher.threads_poster import ThreadsPoster
+    from lobster.publisher import x_poster as x_poster_module
     from lobster.publisher.engagement_tracker import EngagementTracker
     from lobster.scheduler.heartbeat import setup_heartbeats
 
@@ -66,6 +67,9 @@ async def post_init(application):
 
     # ── v2.5 publishers ──
     threads_poster = ThreadsPoster()
+    x_poster = x_poster_module if x_poster_module.is_configured() else None
+    if not x_poster:
+        logger.warning("X_API_* env vars not fully set — x publishing will skip")
 
     # ── Telegram bot ref ──
     telegram_bot = application.bot_data.get("telegram_bot")
@@ -77,6 +81,7 @@ async def post_init(application):
     lobster = Lobster(
         llm=llm,
         db=db,
+        x_poster=x_poster,
         threads_poster=threads_poster,
         telegram=telegram_bot,
         searcher=searcher,

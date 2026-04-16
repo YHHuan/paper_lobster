@@ -16,12 +16,52 @@ with inline keyboard for approve/reject.
 
 import json
 import logging
+import statistics
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from lobster.agent_logic.prompts import EVOLVE_SYSTEM, EVOLVE_USER
 
 logger = logging.getLogger("lobster.agent.evolve")
+
+
+PROMPT_OVERRIDE_SYSTEM = """You are analyzing the lobster's recent social media posts to identify style / hook / angle patterns that drive engagement.
+
+You will be given: a set of TOP posts (high engagement_72h) and a set of BOTTOM posts (low engagement_72h), each with platform, skill, language, hook_score, and the posted text.
+
+Your job: for each of the four roles in the pipeline (WRITER, EDITOR, CRITIC, HOOK), produce a concise delta prompt (≤200 chars each) that would push future posts toward the TOP pattern and away from the BOTTOM pattern.
+
+Rules — any violation means your output is rejected:
+1. Ground every observation in a specific post_id from the input. No generic advice like "write more interesting posts".
+2. If the top/bottom difference is noise (e.g. nothing substantive differs), return an empty string for that role's override. Do not fabricate.
+3. Writer delta = how to phrase hooks / pick framings / what to emphasize.
+4. Editor delta = what to cut / preserve during revision.
+5. Critic delta = additional failure modes to flag beyond the default rubric.
+6. Hook delta = stricter or different criteria for scoring hooks.
+
+Respond strictly in JSON:
+{
+  "diff_rationale": "1-2 sentences describing the actual pattern difference you observed, citing post_ids",
+  "writer": "delta prompt or empty string",
+  "editor": "delta prompt or empty string",
+  "critic": "delta prompt or empty string",
+  "hook":   "delta prompt or empty string"
+}"""
+
+
+PROMPT_OVERRIDE_USER = """TOP posts (high engagement_72h):
+{top_posts}
+
+BOTTOM posts (low engagement_72h):
+{bottom_posts}
+
+Overall context:
+- window: last {window_days} days
+- total posts analyzed: {total_posts}
+- top baseline engagement (mean): {top_baseline:.2f}
+- bottom baseline engagement (mean): {bottom_baseline:.2f}
+
+Produce the JSON."""
 
 
 @dataclass
@@ -100,6 +140,161 @@ class Evolver:
         if source:
             await self.db.update_source_weight(source, weight)
 
+    # ── P1: outcome-gated prompt override (dry-run in W1) ──
+
+    async def run_prompt_override(
+        self,
+        *,
+        window_days: int = 14,
+        min_samples_per_side: int = 5,
+        activate: bool = False,
+    ) -> dict:
+        """Diff top vs bottom engagement posts → propose writer/editor/critic/hook overrides.
+
+        Runs as dry_run by default (W1 plan). Pass activate=True once W2 window
+        opens. Uses local gpt-oss-120b for the diff step (see Locked decisions).
+        """
+        posts = await self._load_posts_with_engagement(window_days=window_days)
+        ranked = self._rank_by_engagement(posts)
+        if len(ranked) < min_samples_per_side * 2:
+            logger.info(
+                f"prompt_override: only {len(ranked)} posts with engagement_72h — "
+                f"need {min_samples_per_side*2}; skipping"
+            )
+            return {"status": "skipped", "reason": "insufficient_samples", "count": len(ranked)}
+
+        top_cut = max(min_samples_per_side, len(ranked) // 10)
+        top = ranked[:top_cut]
+        bottom = ranked[-top_cut:]
+
+        top_baseline = statistics.mean(p["_score"] for p in top) if top else 0.0
+        bottom_baseline = statistics.mean(p["_score"] for p in bottom) if bottom else 0.0
+        overall_baseline = statistics.mean(p["_score"] for p in ranked) if ranked else 0.0
+
+        # Ask gpt-oss-120b for the diff
+        # Temporarily pin the local model for this call only
+        prior_model = self.llm.local.model if hasattr(self.llm, "local") else None
+        try:
+            if hasattr(self.llm, "local"):
+                cached = self.llm.local.get_cached_models()
+                if "gpt-oss-120b" in cached:
+                    self.llm.local.set_model("gpt-oss-120b")
+
+            try:
+                payload = await self.llm.json_local(
+                    agent="prompt_override",
+                    system_prompt=PROMPT_OVERRIDE_SYSTEM,
+                    user_message=PROMPT_OVERRIDE_USER.format(
+                        top_posts=_format_posts(top),
+                        bottom_posts=_format_posts(bottom),
+                        window_days=window_days,
+                        total_posts=len(ranked),
+                        top_baseline=top_baseline,
+                        bottom_baseline=bottom_baseline,
+                    ),
+                    max_tokens=1500,
+                )
+            except Exception as e:
+                logger.warning(f"prompt_override llm call failed: {e}")
+                return {"status": "failed", "error": str(e)}
+        finally:
+            if prior_model and hasattr(self.llm, "local"):
+                self.llm.local.set_model(prior_model)
+
+        if not isinstance(payload, dict):
+            return {"status": "failed", "error": "non-dict response"}
+
+        diff_rationale = payload.get("diff_rationale", "")
+        derived_from = {
+            "top_post_ids": [str(p["id"]) for p in top],
+            "bottom_post_ids": [str(p["id"]) for p in bottom],
+            "window_days": window_days,
+            "diff_rationale": diff_rationale,
+        }
+
+        proposed_status = "active" if activate else "dry_run"
+        created: list[dict] = []
+        for target in ("writer", "editor", "critic", "hook"):
+            content = (payload.get(target) or "").strip()
+            if not content:
+                logger.info(f"prompt_override: {target} skipped (empty delta)")
+                continue
+            row = await self.db.insert_prompt_override(
+                target=target,
+                content=content,
+                derived_from=derived_from,
+                variant="B",
+                status=proposed_status,
+                baseline_engagement=overall_baseline,
+                notes=None,
+            )
+            created.append(row)
+
+        if self.telegram:
+            lines = [
+                f"🧪 Prompt Override { 'proposed (dry-run)' if not activate else 'activated' }",
+                f"Window: last {window_days}d, {len(ranked)} scored posts",
+                f"Top baseline mean: {top_baseline:.1f} | bottom: {bottom_baseline:.1f}",
+                "",
+                f"Rationale: {diff_rationale[:250]}",
+                "",
+            ]
+            if created:
+                lines.append("Drafted deltas:")
+                for row in created:
+                    lines.append(f"  • {row['target']} v{row['version']} variant {row['variant']}")
+                if not activate:
+                    ids = ", ".join(r["id"] for r in created)
+                    lines.append(f"\nActivate: /activate_override <id>  (ids: {ids[:200]})")
+            else:
+                lines.append("(no target had a substantive delta — nothing stored)")
+            try:
+                await self.telegram.notify("\n".join(lines))
+            except Exception:
+                pass
+
+        return {
+            "status": "ok",
+            "created": created,
+            "diff_rationale": diff_rationale,
+            "top_baseline": top_baseline,
+            "bottom_baseline": bottom_baseline,
+            "scored_posts": len(ranked),
+        }
+
+    async def _load_posts_with_engagement(self, *, window_days: int) -> list[dict]:
+        posts = await self.db.get_recent_posts(days=window_days)
+        kept = []
+        for p in posts:
+            eng = p.get("engagement_72h")
+            if not eng or eng == "{}":
+                continue
+            if isinstance(eng, str):
+                try:
+                    eng = json.loads(eng)
+                except Exception:
+                    continue
+            if not isinstance(eng, dict) or not eng:
+                continue
+            score = (
+                (eng.get("like_count") or 0)
+                + (eng.get("reply_count") or 0)
+                + (eng.get("retweet_count") or 0)
+                + (eng.get("quote_count") or 0)
+                + (eng.get("likes") or 0)
+                + (eng.get("replies") or 0)
+            )
+            if score <= 0:
+                continue
+            p["_score"] = float(score)
+            p["_engagement_parsed"] = eng
+            kept.append(p)
+        return kept
+
+    @staticmethod
+    def _rank_by_engagement(posts: list[dict]) -> list[dict]:
+        return sorted(posts, key=lambda p: p["_score"], reverse=True)
+
     async def _gather_stats(self) -> dict:
         loop_stats = await self.db.get_recent_loop_stats(days=7)
         source_weights = await self.db.get_source_weights_full()
@@ -174,3 +369,16 @@ class Evolver:
             await self.telegram.notify("\n".join(parts))
         except Exception:
             pass
+
+
+def _format_posts(posts: list[dict]) -> str:
+    lines = []
+    for p in posts:
+        text = (p.get("posted_text") or p.get("draft_text") or "")[:400]
+        lines.append(
+            f"- post_id={p.get('id')} platform={p.get('platform')} "
+            f"lang={p.get('language')} skill={p.get('skill_used')} "
+            f"hook={p.get('hook_score')} eng_score={p.get('_score'):.1f}\n"
+            f"  text: {text}"
+        )
+    return "\n".join(lines) if lines else "(none)"

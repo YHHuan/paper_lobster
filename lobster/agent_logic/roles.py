@@ -84,9 +84,16 @@ Write ONLY the revised post text. No explanation, no headers."""
 async def run_critic(
     llm, db, draft: str, source_text: str,
     platform: str, language: str, skill: str,
+    *,
+    override_text: str = None,
+    override_label: str = None,
 ) -> dict:
     """Run the Critic on a draft. Returns critique dict."""
-    identity = await load_identity(db)
+    identity = await load_identity(
+        db,
+        override_text=override_text,
+        override_label=override_label or "CRITIC OVERRIDE",
+    )
     system = f"{identity}\n\n---\n\n"
     prompt = CRITIC_PROMPT.format(
         draft=draft,
@@ -110,9 +117,16 @@ async def run_critic(
 async def run_editor(
     llm, db, draft: str, critique: dict,
     source_text: str, length_guide: str,
+    *,
+    override_text: str = None,
+    override_label: str = None,
 ) -> str:
     """Run the Editor to revise a draft based on Critic feedback. Returns revised text."""
-    identity = await load_identity(db)
+    identity = await load_identity(
+        db,
+        override_text=override_text,
+        override_label=override_label or "EDITOR OVERRIDE",
+    )
     system = identity
     prompt = EDITOR_PROMPT.format(
         draft=draft,
