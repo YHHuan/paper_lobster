@@ -73,6 +73,14 @@ class LocalLLMClient:
             models = [m["id"] for m in data.get("data", [])]
             self._remote_models = models
             logger.info(f"Local endpoint models: {models}")
+            if models and self.model not in models:
+                preferred = ["gpt-oss-120b", "gemma4-31b", "gemma4-26b"]
+                fallback = next((p for p in preferred if p in models), models[0])
+                logger.warning(
+                    f"Configured model {self.model!r} not served by endpoint; "
+                    f"switching to {fallback!r}"
+                )
+                self.model = fallback
             return models
         except Exception as e:
             logger.warning(f"Failed to fetch local models: {e}")

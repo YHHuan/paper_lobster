@@ -446,7 +446,8 @@ class Database:
         rows = await self.list_clusters(limit=30)
         lines = []
         for r in rows:
-            lines.append(f"- {r['id']} (conf={r.get('confidence', 0):.2f}): {r.get('current_understanding', '')[:200]}")
+            understanding = (r.get('current_understanding') or '')[:200]
+            lines.append(f"- {r['id']} (conf={r.get('confidence') or 0:.2f}): {understanding}")
         return "\n".join(lines) if lines else "(沒有 cluster — 龍蝦剛開始學習)"
 
     # ── extracts ──
@@ -792,10 +793,14 @@ class Database:
         insights = await self.get_recent_insights(days=days, limit=10)
         lines = ["## Recent extracts"]
         for e in extracts:
-            lines.append(f"- [{e.get('source_type')}] {e.get('title', '?')[:100]} — {e.get('one_liner', '')[:150]}")
+            title = (e.get('title') or '?')[:100]
+            one_liner = (e.get('one_liner') or '')[:150]
+            lines.append(f"- [{e.get('source_type') or '?'}] {title} — {one_liner}")
         lines.append("\n## Recent insights")
         for i in insights:
-            lines.append(f"- ({i.get('type')}) {i.get('title', '')}: {i.get('body', '')[:200]}")
+            ititle = i.get('title') or ''
+            ibody = (i.get('body') or '')[:200]
+            lines.append(f"- ({i.get('type') or '?'}) {ititle}: {ibody}")
         return "\n".join(lines) if (extracts or insights) else "(這 7 天沒有任何 digest)"
 
     # ── pause flag ──
