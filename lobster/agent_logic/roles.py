@@ -135,7 +135,7 @@ async def run_editor(
         length_guide=length_guide,
     )
     try:
-        result = await llm.chat("lobster", system, prompt, max_tokens=1024)
+        result = await llm.chat("lobster", system, prompt, max_tokens=3072)
         if result and len(result.strip()) > 50:
             logger.info(f"Editor revised draft ({len(result)} chars)")
             return result.strip()

@@ -122,7 +122,14 @@ class LocalLLMClient:
             body["response_format"] = {"type": "json_object"}
 
         last_err = None
-        for attempt in range(max_retries + 1):
+        # Reasoning models can blow through max_tokens during thinking → null
+        # content + finish=length. We bump and retry *without* counting it as a
+        # normal retry. LOCAL_LLM_MAX_TOKENS_CAP puts a hard ceiling, and
+        # bump_attempts caps how many times we'll double within one call.
+        cap = int(os.environ.get("LOCAL_LLM_MAX_TOKENS_CAP", "12288"))
+        bump_attempts = 0
+        attempt = 0
+        while attempt <= max_retries:
             try:
                 resp = await self._client.post("/chat/completions", json=body)
                 resp.raise_for_status()
@@ -132,10 +139,12 @@ class LocalLLMClient:
                 logger.warning(f"[local/{agent}] HTTP {e.response.status_code} attempt {attempt + 1}")
                 if e.response.status_code in (429, 503, 529):
                     await asyncio.sleep(2 ** attempt)
+                attempt += 1
                 continue
             except (httpx.RequestError, json.JSONDecodeError) as e:
                 last_err = e
                 logger.warning(f"[local/{agent}] {type(e).__name__}: {e}")
+                attempt += 1
                 continue
 
             usage = data.get("usage") or {}
@@ -145,10 +154,28 @@ class LocalLLMClient:
             choices = data.get("choices") or []
             if not choices:
                 last_err = LocalLLMError(f"empty choices: {json.dumps(data)[:300]}")
+                attempt += 1
                 continue
-            content = (choices[0].get("message") or {}).get("content")
+            message = choices[0].get("message") or {}
+            content = message.get("content")
+            finish_reason = choices[0].get("finish_reason")
             if content is None:
+                current_cap = body.get("max_tokens") or self.max_tokens_default
+                if finish_reason == "length" and current_cap < cap and bump_attempts < 4:
+                    new_cap = min(current_cap * 2, cap)
+                    logger.warning(
+                        f"[local/{agent}] null content + finish=length at "
+                        f"max_tokens={current_cap}; bumping to {new_cap}"
+                    )
+                    body["max_tokens"] = new_cap
+                    bump_attempts += 1
+                    last_err = LocalLLMError(
+                        f"null content @ {current_cap} tokens "
+                        f"(reasoning={bool(message.get('reasoning_content'))})"
+                    )
+                    continue
                 last_err = LocalLLMError(f"null content: {json.dumps(data)[:300]}")
+                attempt += 1
                 continue
             return content
 

@@ -318,7 +318,10 @@ class Lobster:
 
         try:
             # === WRITER: Initial draft ===
-            draft = await self.llm.chat("lobster", system, user_msg, max_tokens=1024)
+            # Reasoning models (gpt-oss-120b) spend tokens thinking; 1024 was
+            # too tight and caused null-content failures. Local bump auto-
+            # grows but starting higher avoids the retry round-trip.
+            draft = await self.llm.chat("lobster", system, user_msg, max_tokens=3072)
             if not draft or len(draft.strip()) < 50:
                 logger.warning(f"Draft too short for {platform}")
                 return None
@@ -400,7 +403,7 @@ class Lobster:
                     f"The hook scored {hook_score}/10: {hook_reason}\n"
                     f"Rewrite with a stronger opening. Original:\n{draft}"
                 )
-                draft = await self.llm.chat("lobster", system, rewrite_msg, max_tokens=1024)
+                draft = await self.llm.chat("lobster", system, rewrite_msg, max_tokens=3072)
                 hook_score, hook_reason = await evaluate_hook(
                     draft, language, self.llm, override_text=hook_override_text,
                 )
@@ -419,7 +422,7 @@ class Lobster:
                     f"AI writing detected: {', '.join(issues)}\n"
                     f"Rewrite to remove these patterns. Original:\n{draft}"
                 )
-                draft = await self.llm.chat("lobster", system, rewrite_msg, max_tokens=1024)
+                draft = await self.llm.chat("lobster", system, rewrite_msg, max_tokens=3072)
                 passed, issues = self.ai_detector.check(draft, language)
                 if not passed:
                     logger.info(f"AI smell still detected after rewrite: {issues}")
@@ -876,7 +879,9 @@ class Lobster:
 
         # X section
         if x_res:
-            parts.append(f"\n━━━ 🐦 X (en) ✅ ━━━")
+            actually_posted = bool(x_res.get("platform_post_id") or x_res.get("url"))
+            banner = "✅" if actually_posted else "⚠️ drafted, NOT posted (check X_API_* env on Railway)"
+            parts.append(f"\n━━━ 🐦 X (en) {banner} ━━━")
             if x_res.get("url"):
                 parts.append(f"🔗 {x_res['url']}")
             parts.append(x_res.get("text", ""))
@@ -890,7 +895,9 @@ class Lobster:
         # Threads section
         if threads_enabled:
             if threads_res:
-                parts.append(f"\n━━━ 🧵 Threads (zh) ✅ ━━━")
+                actually_posted = bool(threads_res.get("platform_post_id") or threads_res.get("url"))
+                banner = "✅" if actually_posted else "⚠️ drafted, NOT posted (check THREADS_* env)"
+                parts.append(f"\n━━━ 🧵 Threads (zh) {banner} ━━━")
                 if threads_res.get("url"):
                     parts.append(f"🔗 {threads_res['url']}")
                 parts.append(threads_res.get("text", ""))
