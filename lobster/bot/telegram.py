@@ -81,45 +81,72 @@ class TelegramBot:
         self.app: Application = None
         self._paused = False
 
+    # Owner-only gate ────────────────────────────────────────────────
+    # Every CommandHandler is wrapped so only the configured owner can
+    # invoke it. Without this, anyone who finds the bot can trigger
+    # /post, /evolve, /prompt_override, etc.
+
+    def _owner_filter(self):
+        return filters.User(self.owner_id)
+
+    def _register_cmd(self, name: str, callback):
+        self.app.add_handler(CommandHandler(name, callback, filters=self._owner_filter()))
+
+    async def _reject_unauthorized(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Catch-all for any command from a non-owner — log only, no reply."""
+        user = update.effective_user
+        logger.warning(
+            "unauthorized command from user_id=%s username=%s text=%r",
+            getattr(user, "id", None),
+            getattr(user, "username", None),
+            (update.message.text[:80] if update.message and update.message.text else None),
+        )
+
     def build_app(self) -> Application:
         self.app = Application.builder().token(self.token).build()
 
         # v2.5 commands
-        self.app.add_handler(CommandHandler("start", self._cmd_start))
-        self.app.add_handler(CommandHandler("stats", self._cmd_stats))
-        self.app.add_handler(CommandHandler("pause", self._cmd_pause))
-        self.app.add_handler(CommandHandler("resume", self._cmd_resume))
-        self.app.add_handler(CommandHandler("rate", self._cmd_rate))
-        self.app.add_handler(CommandHandler("explore", self._cmd_explore))
-        self.app.add_handler(CommandHandler("track", self._cmd_track))
-        self.app.add_handler(CommandHandler("post", self._cmd_post))
-        self.app.add_handler(CommandHandler("relearn", self._cmd_relearn))
-        self.app.add_handler(CommandHandler("binge", self._cmd_binge))
-        self.app.add_handler(CommandHandler("model", self._cmd_model))
-        self.app.add_handler(CommandHandler("testemail", self._cmd_testemail))
+        self._register_cmd("start",     self._cmd_start)
+        self._register_cmd("stats",     self._cmd_stats)
+        self._register_cmd("pause",     self._cmd_pause)
+        self._register_cmd("resume",    self._cmd_resume)
+        self._register_cmd("rate",      self._cmd_rate)
+        self._register_cmd("explore",   self._cmd_explore)
+        self._register_cmd("track",     self._cmd_track)
+        self._register_cmd("post",      self._cmd_post)
+        self._register_cmd("relearn",   self._cmd_relearn)
+        self._register_cmd("binge",     self._cmd_binge)
+        self._register_cmd("model",     self._cmd_model)
+        self._register_cmd("testemail", self._cmd_testemail)
 
         # v3 NEW commands
-        self.app.add_handler(CommandHandler("status",    self._cmd_status))
-        self.app.add_handler(CommandHandler("questions", self._cmd_questions))
-        self.app.add_handler(CommandHandler("inject",    self._cmd_inject))
-        self.app.add_handler(CommandHandler("knowledge", self._cmd_knowledge))
-        self.app.add_handler(CommandHandler("digest",    self._cmd_digest))
-        self.app.add_handler(CommandHandler("feedcrawl", self._cmd_feedcrawl))
-        self.app.add_handler(CommandHandler("feeddigest",self._cmd_feeddigest))
-        self.app.add_handler(CommandHandler("evolve",    self._cmd_evolve))
+        self._register_cmd("status",     self._cmd_status)
+        self._register_cmd("questions",  self._cmd_questions)
+        self._register_cmd("inject",     self._cmd_inject)
+        self._register_cmd("knowledge",  self._cmd_knowledge)
+        self._register_cmd("digest",     self._cmd_digest)
+        self._register_cmd("feedcrawl",  self._cmd_feedcrawl)
+        self._register_cmd("feeddigest", self._cmd_feeddigest)
+        self._register_cmd("evolve",     self._cmd_evolve)
 
         # Evolution v5 commands (P1 + P4)
-        self.app.add_handler(CommandHandler("prompt_override",    self._cmd_prompt_override))
-        self.app.add_handler(CommandHandler("overrides",          self._cmd_overrides))
-        self.app.add_handler(CommandHandler("activate_override",  self._cmd_activate_override))
-        self.app.add_handler(CommandHandler("rollback_override",  self._cmd_rollback_override))
-        self.app.add_handler(CommandHandler("override",           self._cmd_override))
-        self.app.add_handler(CommandHandler("killed",             self._cmd_killed))
+        self._register_cmd("prompt_override",    self._cmd_prompt_override)
+        self._register_cmd("overrides",          self._cmd_overrides)
+        self._register_cmd("activate_override",  self._cmd_activate_override)
+        self._register_cmd("rollback_override",  self._cmd_rollback_override)
+        self._register_cmd("override",           self._cmd_override)
+        self._register_cmd("killed",             self._cmd_killed)
 
-        # URL + natural language
+        # URL + natural language (already owner-gated)
         self.app.add_handler(MessageHandler(
             filters.TEXT & ~filters.COMMAND & filters.User(self.owner_id),
             self._handle_message,
+        ))
+
+        # Catch-all: any command from a non-owner just gets logged and dropped.
+        self.app.add_handler(MessageHandler(
+            filters.COMMAND & ~filters.User(self.owner_id),
+            self._reject_unauthorized,
         ))
 
         return self.app
