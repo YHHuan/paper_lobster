@@ -16,10 +16,13 @@ under `vendor/hermes-agent-main/`. Integration happens via thin shims in
 pip install -e .
 pip install -e vendor/hermes-agent-main   # optional; only if you set LOBSTER_USE_HERMES=1
 
-# minimum env
+# minimum env — see .env.example for the full list
+export OPENROUTER_API_KEY=...         # remote tier (Connect + Writer)
+export SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=...
 export TELEGRAM_BOT_TOKEN=...
 export TELEGRAM_CHAT_ID=...
-export ALLOWED_USER_ID=...            # same as TELEGRAM_CHAT_ID for solo use
+export ALLOWED_USER_ID=...            # numeric Telegram user id — every command is
+                                      # gated on this; other users are silently rejected
 # optional email channel
 export SMTP_HOST=smtp.gmail.com SMTP_PORT=587 SMTP_USER=... SMTP_PASS=... SMTP_FROM=...
 # optional hermes routing (off by default)
@@ -29,6 +32,20 @@ lobster gateway   # Telegram + Email inbound/outbound
 lobster loop      # background curiosity scheduler
 ```
 
+### DB connect mode
+
+Startup runs a health check against Supabase. By default a failure is
+fatal — no more silent degraded mode. Set `ALLOW_DB_DEGRADED=1` to log
+and continue (only useful for local dev without Supabase reachable).
+
+### Remote model selection
+
+`/model <name>` (Telegram) and `connect_remote_model` (YAML) both accept
+friendly names (`sonnet`, `opus`, `gemini-2.5`, `gemini-3`, `gemini-3.1`),
+full OpenRouter ids (`anthropic/claude-sonnet-4-5`), or the bare model
+id (`claude-sonnet-4-5`). The selection persists to Supabase and
+restores on next boot.
+
 ## Processes (Railway)
 
 See `Procfile`:
@@ -37,6 +54,8 @@ See `Procfile`:
 web: lobster gateway
 worker: lobster loop
 ```
+
+Both use the `lobster` console script installed by `pip install -e .`.
 
 ## `LOBSTER_USE_HERMES`
 
@@ -67,6 +86,17 @@ vendor/hermes-agent-main/   # read-only
 `lobster/config/lobster.yaml` — default local model, remote connect model,
 gateway platforms, loop hours, memory mode, cost budget. Override via env where
 documented inline.
+
+## Tests
+
+```bash
+pip install -e '.[dev]'
+pytest -q
+```
+
+Pytest is scoped to `tests/` only; the vendored Hermes tree is
+explicitly excluded in `pyproject.toml` so its 10k+ tests don't get
+pulled in.
 
 ## Status
 
