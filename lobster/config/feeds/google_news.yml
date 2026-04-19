@@ -1,0 +1,73 @@
+# Google News Search RSS — works as a generic crawler shim for any site.
+# Query syntax: site:example.com [keyword] [OR site:other.com ...]
+
+google_news_sources:
+  # English tech
+  - name: TechCrunch AI
+    query: "site:techcrunch.com AI"
+    max_items: 15
+    language: en
+    tier: core
+
+  - name: The Verge
+    query: "site:theverge.com (AI OR tech)"
+    max_items: 10
+    language: en
+    tier: core
+
+  - name: Wired
+    query: "site:wired.com (AI OR science)"
+    max_items: 10
+    language: en
+    tier: core
+
+  # Chinese tech / media
+  - name: INSIDE 科技
+    query: "site:inside.com.tw"
+    max_items: 15
+    language: zh
+    tier: core
+
+  - name: 數位時代
+    query: "site:bnext.com.tw"
+    max_items: 15
+    language: zh
+    tier: core
+
+  - name: iThome
+    query: "site:ithome.com.tw"
+    max_items: 10
+    language: zh
+    tier: extended
+
+  # Medical / scientific
+  - name: STAT News
+    query: "site:statnews.com"
+    max_items: 15
+    language: en
+    tier: core
+
+  - name: NEJM
+    query: "site:nejm.org"
+    max_items: 10
+    language: en
+    tier: core
+
+  - name: Nature News
+    query: "site:nature.com news"
+    max_items: 10
+    language: en
+    tier: core
+
+  # Anime / pop culture
+  - name: 動漫新聞
+    query: "site:gamer.com.tw 動漫"
+    max_items: 10
+    language: zh
+    tier: extended
+
+  - name: Anime News Network
+    query: "site:animenewsnetwork.com"
+    max_items: 8
+    language: en
+    tier: extended

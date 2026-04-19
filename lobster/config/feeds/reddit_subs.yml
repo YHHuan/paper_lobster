@@ -1,0 +1,61 @@
+# Reddit subreddits sampled by RedditExplorer.
+# JSON API only, no OAuth — User-Agent must be set or Reddit returns 403/429.
+
+subreddits:
+  # AI / ML
+  - name: MachineLearning
+    mode: hot
+    min_upvotes: 100
+    tier: core
+  - name: singularity
+    mode: hot
+    min_upvotes: 200
+    tier: core
+  - name: LocalLLaMA
+    mode: hot
+    min_upvotes: 100
+    tier: core
+  - name: ClaudeAI
+    mode: hot
+    min_upvotes: 50
+    tier: core
+
+  # Medical
+  - name: medicine
+    mode: hot
+    min_upvotes: 100
+    tier: extended
+  - name: statistics
+    mode: top
+    mode_time: week
+    min_upvotes: 50
+    tier: extended
+
+  # Cross-domain
+  - name: todayilearned
+    mode: hot
+    min_upvotes: 500
+    tier: extended
+  - name: science
+    mode: hot
+    min_upvotes: 500
+    tier: core
+
+  # Curiosities
+  - name: nottheonion
+    mode: hot
+    min_upvotes: 1000
+    tier: extended
+
+  # Tech philosophy
+  - name: philosophy
+    mode: top
+    mode_time: week
+    min_upvotes: 100
+    tier: extended
+
+fetch_settings:
+  max_age_hours: 48
+  skip_stickied: true
+  skip_nsfw: true
+  request_pause_seconds: 2

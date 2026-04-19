@@ -36,6 +36,8 @@ def setup_heartbeats(
     evolver=None,
     engagement_tracker=None,
     curiosity_loop=None,
+    feed_coordinator=None,
+    digest_generator=None,
 ):
     """Register all heartbeat jobs.
 
@@ -46,6 +48,8 @@ def setup_heartbeats(
         evolver: v3 Evolver (called by mirror, but exposable directly).
         engagement_tracker: EngagementTracker.
         curiosity_loop: v3 brain.curiosity_loop.CuriosityLoop.
+        feed_coordinator: v4 FeedCoordinator (RSS/Reddit/HN/GoogleNews).
+        digest_generator: v4 DigestGenerator (07:30 Telegram digest).
     """
 
     # ── Curiosity seeds (v3 NEW) ─────────────────────────────
@@ -68,6 +72,41 @@ def setup_heartbeats(
             CronTrigger(hour=18, minute=0, timezone=TZ),
             id="seed_evening",
             name="Evening Seed (humanities bias)",
+        )
+
+    # ── Multi-source feed coordinator (v4 NEW) ───────────────
+
+    if feed_coordinator:
+        async def feed_morning():
+            await feed_coordinator.run_exploration(mode="morning")
+
+        async def feed_evening():
+            await feed_coordinator.run_exploration(mode="evening")
+
+        scheduler.add_job(
+            _run_with_jitter(feed_morning),
+            CronTrigger(hour=6, minute=15, timezone=TZ),
+            id="feed_morning",
+            name="Morning Feed Crawl (core tier)",
+        )
+        scheduler.add_job(
+            _run_with_jitter(feed_evening),
+            CronTrigger(hour=18, minute=15, timezone=TZ),
+            id="feed_evening",
+            name="Evening Feed Crawl (core + extended)",
+        )
+
+    # ── Telegram morning digest (v4 NEW) ─────────────────────
+
+    if digest_generator:
+        async def morning_digest():
+            await digest_generator.generate_and_send(hours=12)
+
+        scheduler.add_job(
+            _run_with_jitter(morning_digest),
+            CronTrigger(hour=7, minute=30, timezone=TZ),
+            id="digest_morning",
+            name="Morning Telegram Digest",
         )
 
     # ── Social cron (kept from v2.5) ─────────────────────────
@@ -169,7 +208,9 @@ async def run_forever() -> None:
     from lobster.digester.connect import Connector
     from lobster.digester.synthesize import Synthesizer
     from lobster.explorer.forage import Forager
+    from lobster.explorer.feeds.coordinator import FeedCoordinator
     from lobster.agent_logic.evolve import Evolver
+    from lobster.bot.digest import DigestGenerator
 
     db = Database()
     await db.connect()
@@ -197,6 +238,10 @@ async def run_forever() -> None:
         telegram=None,
     )
     evolver = Evolver(llm=llm, db=db, telegram=None)
+    feed_coordinator = FeedCoordinator(db=db)
+    # The worker has no Telegram app, but digest can still run when a gateway
+    # notifier is injected later. For now we let it write to DB only if called.
+    digest_generator = DigestGenerator(db=db, llm=llm, telegram=None)
 
     scheduler = AsyncIOScheduler(timezone=_os.environ.get("TZ", TZ))
 
@@ -207,12 +252,30 @@ async def run_forever() -> None:
     async def evening_seed():
         await curiosity_loop.seed("evening_seed")
 
+    async def feed_morning():
+        await feed_coordinator.run_exploration(mode="morning")
+
+    async def feed_evening():
+        await feed_coordinator.run_exploration(mode="evening")
+
+    async def morning_digest():
+        await digest_generator.generate_and_send(hours=12)
+
     scheduler.add_job(_run_with_jitter(morning_seed),
                       CronTrigger(hour=6, minute=0, timezone=TZ),
                       id="seed_morning_worker")
     scheduler.add_job(_run_with_jitter(evening_seed),
                       CronTrigger(hour=18, minute=0, timezone=TZ),
                       id="seed_evening_worker")
+    scheduler.add_job(_run_with_jitter(feed_morning),
+                      CronTrigger(hour=6, minute=15, timezone=TZ),
+                      id="feed_morning_worker")
+    scheduler.add_job(_run_with_jitter(feed_evening),
+                      CronTrigger(hour=18, minute=15, timezone=TZ),
+                      id="feed_evening_worker")
+    scheduler.add_job(_run_with_jitter(morning_digest),
+                      CronTrigger(hour=7, minute=30, timezone=TZ),
+                      id="digest_morning_worker")
     scheduler.add_job(_run_with_jitter(evolver.run_weekly),
                       CronTrigger(day_of_week="sun", hour=23, minute=0, timezone=TZ),
                       id="evolve_weekly_worker")
@@ -229,5 +292,6 @@ async def run_forever() -> None:
         scheduler.shutdown(wait=False)
         await curiosity_loop.stop()
         await forager.close()
+        await feed_coordinator.close()
         await llm.close()
         await db.close()

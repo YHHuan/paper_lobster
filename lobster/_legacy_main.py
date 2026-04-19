@@ -120,6 +120,12 @@ async def post_init(application):
     evolver = Evolver(llm=llm, db=db, telegram=telegram_bot)
     mirror = Mirror(llm=llm, db=db, telegram=telegram_bot, evolver=evolver)
 
+    # v4: feed coordinator + morning digest
+    from lobster.explorer.feeds.coordinator import FeedCoordinator
+    from lobster.bot.digest import DigestGenerator
+    feed_coordinator = FeedCoordinator(db=db)
+    digest_generator = DigestGenerator(db=db, llm=llm, telegram=telegram_bot)
+
     # ── Engagement tracker ──
     engagement_tracker = EngagementTracker(
         db=db,
@@ -143,6 +149,8 @@ async def post_init(application):
         "curiosity_loop": curiosity_loop,
         "evolver": evolver,
         "forager": forager,
+        "feed_coordinator": feed_coordinator,
+        "digest_generator": digest_generator,
     })
 
     # ── Scheduler ──
@@ -155,6 +163,8 @@ async def post_init(application):
         evolver=evolver,
         engagement_tracker=engagement_tracker,
         curiosity_loop=curiosity_loop,
+        feed_coordinator=feed_coordinator,
+        digest_generator=digest_generator,
     )
     scheduler.start()
     application.bot_data["scheduler"] = scheduler

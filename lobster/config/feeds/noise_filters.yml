@@ -1,0 +1,15 @@
+# Title-level noise filters applied before insert.
+# Patterns are case-insensitive substring matches against title.
+
+noise_filters:
+  drop_title_contains:
+    - "[deleted]"
+    - "[removed]"
+    - "deleted by user"
+    - "weekly thread"
+    - "daily discussion"
+    - "monthly meta"
+    - "moderator update"
+  drop_url_contains:
+    - "reddit.com/r/announcements"
+    - "youtube.com/shorts"

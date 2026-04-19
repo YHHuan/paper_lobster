@@ -1,0 +1,24 @@
+# Lobster current curiosity topics.
+# Coordinator merges these with knowledge_clusters at runtime to bias exploration.
+
+current_topics:
+  primary:
+    - AI agent
+    - LLM evaluation
+    - medical AI
+    - causal inference
+
+  secondary:
+    - neuroscience
+    - reproductive medicine
+    - CGM
+    - biostatistics
+
+  wildcard:
+    # Random-pick 2-3 per evening run for serendipity.
+    - cryptography
+    - ancient history
+    - octopus cognition
+    - music theory
+    - urban planning
+    - language death

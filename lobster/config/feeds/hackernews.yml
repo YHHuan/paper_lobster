@@ -1,0 +1,22 @@
+# Hacker News Firebase API config.
+
+hackernews:
+  enabled: true
+  modes:
+    - type: top
+      max_items: 30
+      min_score: 100
+    - type: best
+      max_items: 20
+      min_score: 200
+
+  # Stories whose title contains any of these get half the min_score requirement.
+  priority_keywords:
+    - LLM
+    - Claude
+    - AI
+    - neural
+    - medical
+    - causal
+    - biostatistics
+    - Anthropic

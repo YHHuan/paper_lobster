@@ -13,6 +13,7 @@ import os
 import re
 import json
 import logging
+from hashlib import md5
 from typing import Optional
 from datetime import date, datetime, timedelta
 
@@ -984,3 +985,90 @@ class Database:
 
     async def set_loop_paused(self, paused: bool):
         await self.update_identity_state("curiosity_loop_paused", "true" if paused else "false", "user")
+
+    # ============================================================
+    # v4 ADDITIONS — feed coordinator + Telegram digest
+    # ============================================================
+
+    async def insert_discovery_raw(self, item, *, batch_id: str | None = None) -> str | None:
+        """Insert a RawDiscovery from a feed explorer.
+
+        Bypasses the heavier dedup in `insert_discovery` because the coordinator
+        already filters against `get_recent_discovery_url_hashes`. Relies on the
+        unique idx_discoveries_url_hash to absorb concurrent dupes.
+        """
+        url_hash = md5((item.url or "").encode("utf-8")).hexdigest() if item.url else None
+        data = {
+            "source_type": item.source_type,
+            "source_name": item.source_name,
+            "url": item.url,
+            "title": item.title,
+            "summary": (item.raw_text or "")[:1000],
+            "raw_content": item.raw_text,
+            "language": item.language,
+            "metadata": item.metadata or {},
+            "url_hash": url_hash,
+        }
+        if batch_id:
+            data["fetch_batch_id"] = batch_id
+        try:
+            row = await self._insert("discoveries", data)
+            return str(row.get("id")) if row else None
+        except httpx.HTTPStatusError as e:
+            # Unique violation on url_hash means the row already exists; treat as no-op.
+            if e.response is not None and e.response.status_code == 409:
+                return None
+            raise
+
+    async def get_recent_discovery_url_hashes(self, days: int = 7) -> set[str]:
+        since = (datetime.utcnow() - timedelta(days=days)).isoformat()
+        rows = await self._select("discoveries", {
+            "select": "url_hash",
+            "explored_at": f"gte.{since}",
+            "url_hash": "not.is.null",
+            "limit": "5000",
+        })
+        return {r["url_hash"] for r in rows if r.get("url_hash")}
+
+    async def get_discoveries_since(self, since: datetime, *, limit: int = 200) -> list[dict]:
+        return await self._select("discoveries", {
+            "select": "*",
+            "explored_at": f"gte.{since.isoformat()}",
+            "in_digest": "eq.false",
+            "order": "explored_at.desc",
+            "limit": str(limit),
+        })
+
+    async def mark_discoveries_in_digest(self, ids: list[str]):
+        if not ids:
+            return
+        # PostgREST supports `in.(a,b,c)` filter; quote ids for safety.
+        formatted = ",".join(f'"{i}"' for i in ids)
+        params = {"id": f"in.({formatted})"}
+        resp = await self.client.patch("/discoveries", params=params, json={"in_digest": True})
+        if resp.status_code >= 400:
+            self._log_error("UPDATE", "/discoveries", resp)
+            resp.raise_for_status()
+
+    async def insert_digest_history(
+        self,
+        *,
+        categories: dict,
+        discovery_ids: list[str],
+        telegram_message_ids: list[str] | None = None,
+        token_cost: float = 0.0,
+    ) -> str | None:
+        data = {
+            "categories": categories,
+            "discovery_ids": discovery_ids,
+            "telegram_message_ids": telegram_message_ids or [],
+            "token_cost": token_cost,
+        }
+        row = await self._insert("digest_history", data)
+        return str(row.get("id")) if row else None
+
+    async def get_active_dynamic_sources(self) -> list[dict]:
+        return await self._select("dynamic_sources", {
+            "select": "*",
+            "status": "eq.active",
+        })
