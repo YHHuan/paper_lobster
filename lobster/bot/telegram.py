@@ -29,37 +29,43 @@ from lobster.publisher.formatter import truncate_for_telegram
 
 logger = logging.getLogger("lobster.bot")
 
-# Menu commands shown in Telegram (v3)
+# Menu commands shown in Telegram. Grouped by purpose; order = display order.
 MENU_COMMANDS = [
     BotCommand("start",     "Show all commands"),
-    # ── 探索控制 (v3)
-    BotCommand("status",    "Curiosity loop status"),
-    BotCommand("questions", "Show pending open_questions"),
-    BotCommand("inject",    "/inject <question> — push a new open_question"),
-    BotCommand("knowledge", "/knowledge <topic> — show cluster understanding"),
-    BotCommand("digest",    "Show recent digest results"),
-    BotCommand("feedcrawl", "Trigger v4 multi-source crawl now (morning mode)"),
-    BotCommand("feeddigest","/feeddigest [hours] — render + send digest now (default 12h)"),
-    BotCommand("evolve",    "Trigger weekly Evolve now"),
-    # ── 內容 (v2.5)
-    BotCommand("post",      "Trigger a post now"),
+
+    # ── Curiosity loop (v3) ──
+    BotCommand("status",    "Loop status + token usage"),
+    BotCommand("questions", "List pending open_questions"),
+    BotCommand("inject",    "/inject <q> — push a new open_question"),
+    BotCommand("knowledge", "/knowledge <topic> — cluster understanding"),
+    BotCommand("pause",     "Pause loop + auto-posting"),
+    BotCommand("resume",    "Resume loop + auto-posting"),
+
+    # ── v4 multi-source feeds + morning digest ──
+    BotCommand("feedcrawl", "Run v4 multi-source crawl now"),
+    BotCommand("feeddigest","/feeddigest [hours] — send digest now (default 12h)"),
+    BotCommand("digest",    "Show stored digest summary (last 2d)"),
+
+    # ── Content publishing (v2.5) ──
+    BotCommand("post",      "Trigger one post now"),
     BotCommand("explore",   "/explore <topic> — quick web search"),
     BotCommand("binge",     "Binge explore N rounds (default 15, max 20)"),
-    BotCommand("relearn",   "Re-ingest updated soul/style identity"),
-    # ── 數據 / 控制
-    BotCommand("stats",     "Monthly statistics & budget"),
-    BotCommand("model",     "Show or switch active LLM model"),
-    BotCommand("track",     "Track an X account"),
-    BotCommand("rate",      "Rate insight/post: /rate <id> <1-5> [comment]"),
-    BotCommand("pause",     "Pause curiosity loop + auto-posting"),
-    BotCommand("resume",    "Resume curiosity loop + auto-posting"),
-    # ── Evolution v5
-    BotCommand("prompt_override",   "Generate writer/editor/critic/hook deltas (dry-run; add 'activate' to go live)"),
-    BotCommand("overrides",         "List active + dry-run prompt overrides"),
-    BotCommand("activate_override", "/activate_override <id> — promote dry_run to active"),
-    BotCommand("rollback_override", "/rollback_override <id> [reason] — mark as rolled_back"),
-    BotCommand("override",          "/override <post_id> — revive a Critic-killed draft"),
-    BotCommand("killed",            "Show recent Critic-killed drafts (for /override)"),
+    BotCommand("relearn",   "Re-ingest soul/style identity"),
+
+    # ── Evolution (weekly + v5 prompt overrides) ──
+    BotCommand("evolve",    "Trigger weekly Evolve now"),
+    BotCommand("prompt_override",   "/prompt_override [activate] — diff writer/editor/critic/hook"),
+    BotCommand("overrides",         "List active + dry_run prompt overrides"),
+    BotCommand("activate_override", "/activate_override <id> — promote dry_run → active"),
+    BotCommand("rollback_override", "/rollback_override <id> [reason]"),
+    BotCommand("override",          "/override <post_id> — revive a killed draft"),
+    BotCommand("killed",            "List recent Critic-killed drafts"),
+
+    # ── System ──
+    BotCommand("stats",     "Monthly stats + budget"),
+    BotCommand("model",     "Show / switch active LLM"),
+    BotCommand("track",     "/track <handle> — track X account"),
+    BotCommand("rate",      "/rate <id> <1-5> [comment]"),
 ]
 
 
@@ -274,27 +280,35 @@ class TelegramBot:
 
     async def _cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
-            "🦞 Lobster v3.0 — 你的研究探索龍蝦\n\n"
-            "── 🔬 探索控制 ──\n"
+            "🦞 Lobster v4 — 你的研究探索龍蝦\n\n"
+            "── 🔬 Curiosity Loop ──\n"
             "📊 /status — 龍蝦現在在幹嘛\n"
             "❓ /questions — 目前的 open questions\n"
             "💉 /inject <問題> — 手動塞一個探索問題\n"
             "🧠 /knowledge <topic> — 查 cluster 理解\n"
-            "📚 /digest — 最近一次消化結果\n"
-            "🧬 /evolve — 立刻觸發進化提案\n"
-            "\n── 📝 內容 (v2.5) ──\n"
+            "⏸ /pause　▶️ /resume — 暫停 / 恢復 loop\n"
+            "\n── 📰 v4 多源爬蟲 + 晨間 Digest ──\n"
+            "🔎 /feedcrawl — 立刻跑一輪 multi-source 爬蟲\n"
+            "📨 /feeddigest [hours] — 立刻生 digest 並送到聊天室（預設 12h）\n"
+            "📚 /digest — 看最近 2 天已存的 digest summary\n"
+            "\n── 📝 內容發文 (v2.5) ──\n"
             "📝 /post — 立刻觸發一次發文\n"
             "🔍 /explore <topic> — 立刻 web 搜尋\n"
             "🍽 /binge [n] — 狂探索 n 輪\n"
             "🧠 /relearn — 重新內化 soul/style\n"
+            "\n── 🧬 Evolution ──\n"
+            "🧬 /evolve — 立刻觸發 weekly Evolve\n"
+            "🧪 /prompt_override [activate] — 跑 P1 prompt diff（預設 dry-run）\n"
+            "📋 /overrides — 列出 active + dry_run overrides\n"
+            "✅ /activate_override <id> — dry_run → active\n"
+            "↩️ /rollback_override <id> [reason]\n"
+            "🪦 /killed　🔁 /override <post_id> — 看/復活被 Critic 殺掉的 draft\n"
             "\n── ⚙️ 系統 ──\n"
             "📊 /stats — 本月統計 & 預算\n"
-            "🤖 /model [name] — 看/切換模型\n"
+            "🤖 /model [name] — 看 / 切換模型\n"
             "👁 /track <handle> — 追蹤 X 帳號\n"
-            "⭐ /rate <id> <1-5> [評語] — 評價\n"
-            "⏸ /pause — 暫停\n"
-            "▶️ /resume — 恢復\n"
-            "\n📎 貼 URL → 立即進入 Forage→Digest\n"
+            "⭐ /rate <id> <1-5> [評語] — 評價 insight/post\n"
+            "\n📎 貼 URL → 立即 Forage → Digest\n"
             "💭 打字 → 跟龍蝦聊天"
         )
 
