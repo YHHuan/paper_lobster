@@ -28,7 +28,19 @@ class Database:
         self.key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ["SUPABASE_ANON_KEY"]
         self.client: Optional[httpx.AsyncClient] = None
 
-    async def connect(self):
+    async def connect(self, strict: bool | None = None):
+        """Open the HTTP client and run a health check.
+
+        strict=True  → raise RuntimeError if the health check fails. Default.
+        strict=False → log only, keep the client open. Use for dev/CLI tools.
+        strict=None  → strict unless env ALLOW_DB_DEGRADED=1 is set.
+
+        Previous behaviour: log-only. Silent degradation meant the gateway
+        reported "online" while every DB operation went on to fail.
+        """
+        if strict is None:
+            strict = os.environ.get("ALLOW_DB_DEGRADED", "").strip() not in {"1", "true", "yes"}
+
         base = f"{self.url}/rest/v1"
         self.client = httpx.AsyncClient(
             base_url=base,
@@ -46,7 +58,13 @@ class Database:
             resp.raise_for_status()
             logger.info("DB health check passed")
         except Exception as e:
-            logger.error(f"DB health check FAILED: {e}")
+            if strict:
+                logger.error(f"DB health check FAILED: {e}")
+                raise RuntimeError(
+                    "DB health check failed — aborting startup. "
+                    "Set ALLOW_DB_DEGRADED=1 to start anyway."
+                ) from e
+            logger.warning(f"DB health check failed (degraded mode): {e}")
 
     async def close(self):
         if self.client:
