@@ -38,6 +38,8 @@ MENU_COMMANDS = [
     BotCommand("inject",    "/inject <question> — push a new open_question"),
     BotCommand("knowledge", "/knowledge <topic> — show cluster understanding"),
     BotCommand("digest",    "Show recent digest results"),
+    BotCommand("feedcrawl", "Trigger v4 multi-source crawl now (morning mode)"),
+    BotCommand("feeddigest","/feeddigest [hours] — render + send digest now (default 12h)"),
     BotCommand("evolve",    "Trigger weekly Evolve now"),
     # ── 內容 (v2.5)
     BotCommand("post",      "Trigger a post now"),
@@ -96,6 +98,8 @@ class TelegramBot:
         self.app.add_handler(CommandHandler("inject",    self._cmd_inject))
         self.app.add_handler(CommandHandler("knowledge", self._cmd_knowledge))
         self.app.add_handler(CommandHandler("digest",    self._cmd_digest))
+        self.app.add_handler(CommandHandler("feedcrawl", self._cmd_feedcrawl))
+        self.app.add_handler(CommandHandler("feeddigest",self._cmd_feeddigest))
         self.app.add_handler(CommandHandler("evolve",    self._cmd_evolve))
 
         # Evolution v5 commands (P1 + P4)
@@ -375,6 +379,52 @@ class TelegramBot:
     async def _cmd_digest(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = await self.db.get_recent_digest_summary(days=2)
         await update.message.reply_text(f"📚 Recent digest (2d):\n\n{text}")
+
+    async def _cmd_feedcrawl(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """/feedcrawl — run FeedCoordinator once (morning tier mix)."""
+        fc = context.bot_data.get("feed_coordinator")
+        if not fc:
+            await update.message.reply_text("❌ feed_coordinator not initialized")
+            return
+        await update.message.reply_text("🔎 Running v4 feed crawl (morning mode)...")
+        try:
+            result = await fc.run_exploration(mode="morning")
+            await update.message.reply_text(
+                f"✅ Crawl done.\n"
+                f"  inserted: {result.get('inserted', 0)}\n"
+                f"  considered: {result.get('considered', 0)}\n"
+                f"  batch_id: {result.get('batch_id', '-')}"
+            )
+        except Exception as e:
+            logger.error(f"feedcrawl failed: {e}", exc_info=True)
+            await update.message.reply_text(f"❌ feedcrawl failed: {e}")
+
+    async def _cmd_feeddigest(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """/feeddigest [hours] — render and send morning digest now."""
+        dg = context.bot_data.get("digest_generator")
+        if not dg:
+            await update.message.reply_text("❌ digest_generator not initialized")
+            return
+        hours = 12
+        if context.args:
+            try:
+                hours = int(context.args[0])
+            except ValueError:
+                await update.message.reply_text("❌ usage: /feeddigest [hours]")
+                return
+        await update.message.reply_text(f"📰 Generating digest (last {hours}h)...")
+        try:
+            result = await dg.generate_and_send(hours=hours)
+            cats = result.get("categories") or {}
+            cats_str = ", ".join(f"{k}:{v}" for k, v in cats.items()) or "-"
+            await update.message.reply_text(
+                f"✅ Digest sent.\n"
+                f"  items: {result.get('sent', 0)}\n"
+                f"  breakdown: {cats_str}"
+            )
+        except Exception as e:
+            logger.error(f"feeddigest failed: {e}", exc_info=True)
+            await update.message.reply_text(f"❌ feeddigest failed: {e}")
 
     async def _cmd_evolve(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self.evolver:
