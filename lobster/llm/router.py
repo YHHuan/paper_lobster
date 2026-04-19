@@ -52,6 +52,14 @@ class LLMRouter:
             logger.error(f"Remote client init failed: {e}")
             self.remote = None
 
+        # Apply YAML-supplied remote model as the initial active model so
+        # `connect_remote_model: sonnet` actually takes effect at boot
+        # (previously loaded but ignored). load_active_model_from_db() can
+        # still override later if the user pinned a different model.
+        remote_default = cfg.get("connect_remote_model")
+        if self.remote and remote_default and not self.remote.set_active_model(remote_default):
+            logger.warning(f"connect_remote_model={remote_default!r} not recognised; keeping default")
+
     # ── Bookkeeping ──
 
     def inject_db(self, db):

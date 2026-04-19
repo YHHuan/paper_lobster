@@ -6,8 +6,10 @@ llm:
   # Default local model served by the local LLM endpoint.
   # Used for chat, curiosity loop, digest, reflect — everything except Connect.
   default_local_model: "gemma-4"
-  # Connect/deep-research upgrades to remote. Set to null to disable.
-  connect_remote_model: "claude-sonnet-4-5"
+  # Connect/deep-research upgrades to remote. Friendly name preferred
+  # (sonnet | opus | gemini-2.5 | gemini-3 | gemini-3.1); provider ids
+  # also accepted. Set to null to disable.
+  connect_remote_model: "sonnet"
   # Endpoint of the local OpenAI-compatible server.
   local_endpoint: "http://localhost:1234/v1"
 

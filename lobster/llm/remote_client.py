@@ -42,6 +42,26 @@ class RemoteLLMError(Exception):
     pass
 
 
+def _resolve_model_name(name: str) -> str | None:
+    """Map a user-supplied model string to a key in ``AVAILABLE_MODELS``.
+
+    Accepts:
+      - friendly name directly (``sonnet`` → ``sonnet``)
+      - full provider id (``anthropic/claude-sonnet-4-5`` → ``sonnet``)
+      - bare model id without provider prefix (``claude-sonnet-4-5`` → ``sonnet``)
+    Returns ``None`` if nothing matches.
+    """
+    if name in AVAILABLE_MODELS:
+        return name
+    for friendly, provider_id in AVAILABLE_MODELS.items():
+        if name == provider_id:
+            return friendly
+        # Match on the bare-id suffix, e.g. "claude-sonnet-4-5" vs "anthropic/claude-sonnet-4-5"
+        if "/" in provider_id and provider_id.split("/", 1)[1] == name:
+            return friendly
+    return None
+
+
 class RemoteLLMClient:
     def __init__(self):
         api_key = os.environ.get("OPENROUTER_API_KEY")
@@ -75,10 +95,15 @@ class RemoteLLMClient:
         return self._active_model_name
 
     def set_active_model(self, name: str) -> bool:
-        if name not in AVAILABLE_MODELS:
+        """Accept either a friendly name (``sonnet``) or a provider id
+        (``anthropic/claude-sonnet-4-5`` — with or without provider prefix)."""
+        if not name:
             return False
-        self._active_model_name = name
-        logger.info(f"remote model switched → {name} ({AVAILABLE_MODELS[name]})")
+        resolved = _resolve_model_name(name)
+        if resolved is None:
+            return False
+        self._active_model_name = resolved
+        logger.info(f"remote model switched → {resolved} ({AVAILABLE_MODELS[resolved]})")
         return True
 
     def get_model_info(self) -> dict:
