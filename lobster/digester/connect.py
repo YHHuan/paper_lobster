@@ -6,13 +6,19 @@ stores connection_result in `connections` table.
 This is the only step in the pipeline that costs real money.
 """
 
-import json
 import logging
 from datetime import datetime
 
 from lobster.agent_logic.prompts import CONNECT_SYSTEM, CONNECT_USER
+from lobster.utils.prompt_budget import compact_json, truncate_chars
 
 logger = logging.getLogger("lobster.digester.connect")
+
+# Per-cluster text budget when packing the knowledge context. Sonnet still
+# sees the cluster id and open gaps in full; this only caps the
+# current_understanding narrative.
+_CLUSTER_TEXT_LIMIT = 400
+_MAX_CLUSTERS = 20
 
 
 class Connector:
@@ -26,15 +32,15 @@ class Connector:
         if not extract:
             return None
 
-        # Get relevant clusters — we feed all clusters in for the LLM to
-        # decide which are relevant. For 30+ clusters this could grow,
-        # but Sonnet's context handles it fine for now.
-        clusters = await self.db.list_clusters(limit=30)
+        # Pack clusters: cap count + trim narrative so prompt stays bounded.
+        clusters = await self.db.list_clusters(limit=_MAX_CLUSTERS)
         relevant = [
             {
                 "id": c["id"],
-                "current_understanding": c.get("current_understanding", ""),
-                "open_gaps": c.get("open_gaps", []),
+                "current_understanding": truncate_chars(
+                    c.get("current_understanding", ""), _CLUSTER_TEXT_LIMIT
+                ),
+                "open_gaps": (c.get("open_gaps") or [])[:3],
             }
             for c in clusters
         ]
@@ -44,8 +50,8 @@ class Connector:
                 agent="connect",
                 system_prompt=CONNECT_SYSTEM,
                 user_message=CONNECT_USER.format(
-                    structured_extract_json=json.dumps(extract.get("structured_data", {}), ensure_ascii=False, indent=2),
-                    relevant_clusters_json=json.dumps(relevant, ensure_ascii=False, indent=2),
+                    structured_extract_json=compact_json(extract.get("structured_data", {})),
+                    relevant_clusters_json=compact_json(relevant),
                 ),
                 max_tokens=2048,
             )

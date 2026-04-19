@@ -941,7 +941,7 @@ class TelegramBot:
         if self.llm and self.lobster:
             try:
                 from lobster.utils.identity_loader import load_identity
-                identity = await load_identity(self.db)
+                identity = await load_identity(self.db, mode="chat")
 
                 # Build user message with reply context
                 if reply_block:
