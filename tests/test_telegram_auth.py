@@ -60,7 +60,6 @@ def _iter_command_handlers(app):
 
 def test_every_command_enforces_owner_filter(owner_env):
     """Phase 1 contract: no CommandHandler is publicly reachable."""
-    from telegram.ext.filters import User as UserFilter
     from lobster.bot.telegram import TelegramBot
     bot = TelegramBot()
     app = bot.build_app()
