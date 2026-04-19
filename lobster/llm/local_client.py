@@ -20,20 +20,40 @@ class LocalLLMError(Exception):
 
 
 class LocalLLMClient:
-    """OpenAI-compatible local client. Free to call (you host it)."""
+    """OpenAI-compatible local client. Free to call (you host it).
 
-    def __init__(self):
-        base = os.environ.get("LOCAL_LLM_BASE_URL", "").rstrip("/")
-        if not base:
-            # Fall back to OPENAI_BASE_URL for backward compat with v2
-            base = os.environ.get("OPENAI_BASE_URL", "").rstrip("/")
-        self.base_url = base
+    Config resolution (highest priority first):
+      base_url    LOCAL_LLM_BASE_URL > OPENAI_BASE_URL > base_url kwarg > ""
+      model       LOCAL_LLM_MODEL > LLM_MODEL > model kwarg > DEFAULT_LOCAL_MODEL
+      max_tokens  LOCAL_LLM_MAX_TOKENS > max_tokens_default kwarg > 4096
+
+    The kwargs are where LLMRouter passes YAML-derived defaults.
+    """
+
+    def __init__(
+        self,
+        base_url: str | None = None,
+        model: str | None = None,
+        max_tokens_default: int | None = None,
+    ):
+        env_base = (
+            os.environ.get("LOCAL_LLM_BASE_URL")
+            or os.environ.get("OPENAI_BASE_URL")
+        )
+        self.base_url = (env_base or base_url or "").rstrip("/")
         self.model = (
             os.environ.get("LOCAL_LLM_MODEL")
             or os.environ.get("LLM_MODEL")
+            or model
             or DEFAULT_LOCAL_MODEL
         )
-        self.max_tokens_default = int(os.environ.get("LOCAL_LLM_MAX_TOKENS", "4096"))
+        env_mt = os.environ.get("LOCAL_LLM_MAX_TOKENS")
+        if env_mt:
+            self.max_tokens_default = int(env_mt)
+        elif max_tokens_default is not None:
+            self.max_tokens_default = int(max_tokens_default)
+        else:
+            self.max_tokens_default = 4096
 
         self._client: httpx.AsyncClient | None = None
         self._remote_models: list[str] | None = None  # cached from /models

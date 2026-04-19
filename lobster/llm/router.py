@@ -15,6 +15,7 @@ explicitly or use the convenience methods.
 """
 
 import logging
+from pathlib import Path
 from typing import Literal
 
 from .local_client import LocalLLMClient, LocalLLMError
@@ -24,10 +25,27 @@ logger = logging.getLogger("lobster.llm.router")
 
 Tier = Literal["local", "remote"]
 
+_CONFIG_PATH = Path(__file__).parent.parent / "config" / "lobster.yaml"
+
+
+def _load_llm_cfg() -> dict:
+    """Best-effort YAML load. Returns {} on any error so the router never
+    fails to start because of a missing/broken config file."""
+    try:
+        import yaml
+        return (yaml.safe_load(_CONFIG_PATH.read_text(encoding="utf-8")) or {}).get("llm", {})
+    except Exception as e:
+        logger.debug(f"llm config load failed: {e}")
+        return {}
+
 
 class LLMRouter:
     def __init__(self):
-        self.local = LocalLLMClient()
+        cfg = _load_llm_cfg()
+        self.local = LocalLLMClient(
+            base_url=cfg.get("local_endpoint"),
+            model=cfg.get("default_local_model"),
+        )
         try:
             self.remote = RemoteLLMClient()
         except RemoteLLMError as e:
