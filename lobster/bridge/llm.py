@@ -82,6 +82,33 @@ class LobsterLLM:
     def list_models(self) -> list[dict]:
         return self._fallback.list_models()
 
+    # ── Tier clients (forward to underlying v3 router) ──
+    # CuriosityLoop, telegram `/model`, and evolve.py read these directly to
+    # check total_tokens, cached models, active model, etc. We can't remove
+    # those call sites cheaply, so expose them as properties.
+
+    @property
+    def local(self):
+        return self._fallback.local
+
+    @property
+    def remote(self):
+        return self._fallback.remote
+
+    # ── Token accounting snapshot API ──
+    # Prefer this over reading self.llm.local.total_tokens directly — it keeps
+    # the wrapper's internals swappable (hermes router, etc.) and won't crash
+    # if a tier is None.
+
+    def get_token_snapshot(self) -> dict[str, int]:
+        local = self._fallback.local.total_tokens if self._fallback.local else 0
+        remote = self._fallback.remote.total_tokens if self._fallback.remote else 0
+        return {"local": local, "remote": remote}
+
+    def diff_token_snapshot(self, before: dict[str, int]) -> dict[str, int]:
+        now = self.get_token_snapshot()
+        return {k: now.get(k, 0) - before.get(k, 0) for k in now}
+
     # ── Chat surface ──
     async def chat(self, agent, system_prompt, user_message, tier="local", **kw):
         # Hermes path is TODO; always delegate to v3 router for now.

@@ -217,9 +217,15 @@ class CuriosityLoop:
 
         soul = _load_soul()
 
-        # Track tokens for run accounting
-        local_before = self.llm.local.total_tokens
-        remote_before = self.llm.remote.total_tokens if self.llm.remote else 0
+        # Track tokens for run accounting. Prefer the wrapper's snapshot API
+        # so we don't crash if a tier is None or the wrapper is swapped out.
+        if hasattr(self.llm, "get_token_snapshot"):
+            token_snapshot = self.llm.get_token_snapshot()
+        else:
+            token_snapshot = {
+                "local": self.llm.local.total_tokens if getattr(self.llm, "local", None) else 0,
+                "remote": self.llm.remote.total_tokens if getattr(self.llm, "remote", None) else 0,
+            }
 
         extracts_count = 0
         connections_count = 0
@@ -252,8 +258,17 @@ class CuriosityLoop:
 
             await self.db.mark_question_status(q_row["id"], "resolved")
 
-            local_used = self.llm.local.total_tokens - local_before
-            remote_used = (self.llm.remote.total_tokens - remote_before) if self.llm.remote else 0
+            if hasattr(self.llm, "diff_token_snapshot"):
+                used = self.llm.diff_token_snapshot(token_snapshot)
+            else:
+                used = {
+                    "local": (self.llm.local.total_tokens if getattr(self.llm, "local", None) else 0)
+                             - token_snapshot["local"],
+                    "remote": (self.llm.remote.total_tokens if getattr(self.llm, "remote", None) else 0)
+                              - token_snapshot["remote"],
+                }
+            local_used = used["local"]
+            remote_used = used["remote"]
 
             await self.db.finish_loop_run(
                 run_id,
