@@ -23,7 +23,7 @@ class HackerNewsExplorer(BaseFeedExplorer):
         modes = hn.get("modes") or []
         priority_kw = [k.lower() for k in hn.get("priority_keywords") or []]
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
             for mode_cfg in modes:
                 mode = mode_cfg.get("type")
                 if not mode:

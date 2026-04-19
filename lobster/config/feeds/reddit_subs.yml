@@ -58,4 +58,4 @@ fetch_settings:
   max_age_hours: 48
   skip_stickied: true
   skip_nsfw: true
-  request_pause_seconds: 2
+  request_pause_seconds: 3

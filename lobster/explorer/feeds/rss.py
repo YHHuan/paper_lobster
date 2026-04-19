@@ -28,7 +28,11 @@ class RSSExplorer(BaseFeedExplorer):
 
     async def fetch(self, config: dict) -> AsyncIterator[RawDiscovery]:
         sources = config.get("sources") or []
-        async with httpx.AsyncClient(timeout=30.0, headers={"User-Agent": USER_AGENT}) as client:
+        async with httpx.AsyncClient(
+            timeout=30.0,
+            headers={"User-Agent": USER_AGENT},
+            follow_redirects=True,
+        ) as client:
             for source in sources:
                 async for item in self._fetch_one(client, source):
                     yield item
@@ -76,7 +80,11 @@ class GoogleNewsExplorer(BaseFeedExplorer):
 
     async def fetch(self, config: dict) -> AsyncIterator[RawDiscovery]:
         sources = config.get("google_news_sources") or []
-        async with httpx.AsyncClient(timeout=30.0, headers={"User-Agent": USER_AGENT}) as client:
+        async with httpx.AsyncClient(
+            timeout=30.0,
+            headers={"User-Agent": USER_AGENT},
+            follow_redirects=True,
+        ) as client:
             for source in sources:
                 async for item in self._fetch_one(client, source):
                     yield item
