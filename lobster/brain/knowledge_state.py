@@ -9,7 +9,6 @@ Both are kept in sync. JSON is opt-in via env KNOWLEDGE_STATE_PATH; if unset,
 DB is the only store.
 """
 
-import os
 import json
 import logging
 from datetime import datetime

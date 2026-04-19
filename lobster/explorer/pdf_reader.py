@@ -5,7 +5,6 @@ Install: pip install pymupdf
 """
 
 import logging
-import tempfile
 
 import httpx
 

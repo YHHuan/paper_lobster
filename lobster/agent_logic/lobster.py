@@ -11,7 +11,7 @@ import os
 import json
 import random
 import logging
-from datetime import datetime, date
+from datetime import datetime
 
 from lobster.utils.identity_loader import load_identity
 from lobster.utils.ai_smell_detector import AISmellDetector
@@ -19,9 +19,8 @@ from lobster.utils.hook_evaluator import evaluate_hook
 from lobster.utils.number_validator import validate_numbers
 from lobster.agent_logic.prompts import (
     EXPLORE_PROMPT, CREATE_POST_PROMPT, CREATE_POST_LENGTH,
-    REPLY_PROMPT, REFLECT_PROMPT, SKILL_SELECT_PROMPT,
+    REFLECT_PROMPT, SKILL_SELECT_PROMPT,
 )
-from lobster.agent_logic.spawn import spawn_research
 from lobster.agent_logic.deep_research import deep_research
 from lobster.agent_logic.roles import run_critic, run_editor
 
@@ -545,7 +544,6 @@ class Lobster:
         )
 
         identity = await load_identity(self.db)
-        from lobster.agent_logic.prompts import REFLECT_PROMPT
         system = identity
         user_msg = REFLECT_PROMPT.format(today_summary=today_summary)
 
@@ -576,7 +574,7 @@ class Lobster:
                     if stats:
                         await self.evolution.propose_and_execute(
                             "update_skill_preference",
-                            f"Updated skill preferences from engagement data",
+                            "Updated skill preferences from engagement data",
                             {"weights": stats, "source": "nightly_reflect"},
                         )
                     # Execute any pending medium-risk changes past 24h
@@ -868,7 +866,7 @@ class Lobster:
 
     async def _notify_post_results(self, discovery, results):
         """Send Telegram notification about published posts — include full text + URLs."""
-        parts = [f"🦞 New discovery published:"]
+        parts = ["🦞 New discovery published:"]
         parts.append(f"📌 {discovery.get('title', 'N/A')[:80]}")
         if discovery.get("url"):
             parts.append(f"🔗 Source: {discovery['url']}")
@@ -890,7 +888,7 @@ class Lobster:
         elif x_res is None:
             pass  # X skipped this round (daily cap)
         else:
-            parts.append(f"\n🐦 X ❌ failed")
+            parts.append("\n🐦 X ❌ failed")
 
         # Threads section
         if threads_enabled:
@@ -902,6 +900,6 @@ class Lobster:
                     parts.append(f"🔗 {threads_res['url']}")
                 parts.append(threads_res.get("text", ""))
             else:
-                parts.append(f"\n🧵 Threads ❌ failed")
+                parts.append("\n🧵 Threads ❌ failed")
 
         await self.telegram.notify("\n".join(parts))

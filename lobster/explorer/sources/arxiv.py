@@ -48,9 +48,9 @@ class ArXivSource(Source):
                 pub_date = (entry.findtext("atom:published", "", ns) or "").strip()
 
                 link = ""
-                for l in entry.findall("atom:link", ns):
-                    if l.get("type") == "text/html":
-                        link = l.get("href", "")
+                for link_el in entry.findall("atom:link", ns):
+                    if link_el.get("type") == "text/html":
+                        link = link_el.get("href", "")
                         break
                 if not link:
                     link = (entry.findtext("atom:id", "", ns) or "")

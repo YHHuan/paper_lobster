@@ -229,7 +229,7 @@ class EvolutionEngine:
                 if section and new_content:
                     # Read current style.md, apply change
                     style_path = IDENTITY_DIR / "style.md"
-                    current = style_path.read_text(encoding="utf-8")
+                    style_path.read_text(encoding="utf-8")
                     # Store the proposed change for git commit later
                     await self.db.log_evolution(
                         type="applied:modify_style_voice",

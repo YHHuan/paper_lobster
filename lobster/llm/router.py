@@ -18,7 +18,7 @@ import logging
 from pathlib import Path
 from typing import Literal
 
-from .local_client import LocalLLMClient, LocalLLMError
+from .local_client import LocalLLMClient
 from .remote_client import RemoteLLMClient, RemoteLLMError
 
 logger = logging.getLogger("lobster.llm.router")

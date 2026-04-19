@@ -6,7 +6,6 @@ instead of relying solely on Tavily web search.
 
 import logging
 import xml.etree.ElementTree as ET
-from urllib.parse import quote
 
 import httpx
 
@@ -165,9 +164,9 @@ class AcademicSearch:
                 title = entry.findtext("atom:title", "", ns).strip().replace("\n", " ")
                 summary = entry.findtext("atom:summary", "", ns).strip().replace("\n", " ")
                 link = ""
-                for l in entry.findall("atom:link", ns):
-                    if l.get("type") == "text/html":
-                        link = l.get("href", "")
+                for link_el in entry.findall("atom:link", ns):
+                    if link_el.get("type") == "text/html":
+                        link = link_el.get("href", "")
                         break
                 if not link:
                     id_text = entry.findtext("atom:id", "", ns)

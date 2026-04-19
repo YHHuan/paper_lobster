@@ -15,7 +15,6 @@ in `context.chat_data["reply_ctx"]` so every handler can use it.
 
 import os
 import re
-import json
 import logging
 from datetime import datetime
 
@@ -785,7 +784,7 @@ class TelegramBot:
             models = await self.llm.refresh_local_models()
             if models:
                 await update.message.reply_text(
-                    f"🔄 Local endpoint models:\n" + "\n".join(f"  • {m}" for m in models)
+                    "🔄 Local endpoint models:\n" + "\n".join(f"  • {m}" for m in models)
                 )
             else:
                 await update.message.reply_text("❌ Could not fetch models from local endpoint")
@@ -917,7 +916,7 @@ class TelegramBot:
             try:
                 result = await self.loop.inject_url(url)
                 if result.get("status") == "ok":
-                    n_ins = len(result.get("insights") or [])
+                    len(result.get("insights") or [])
                     conn = result.get("connection") or {}
                     insight_text = conn.get('insight') or ''
                     # Show produced insight titles + bodies if any

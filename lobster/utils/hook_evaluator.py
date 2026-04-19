@@ -4,7 +4,6 @@ Uses LLM to rate the opening of a draft on a 1-10 scale.
 < 7 = reject and rewrite.
 """
 
-import json
 import logging
 
 logger = logging.getLogger("lobster.utils.hook")

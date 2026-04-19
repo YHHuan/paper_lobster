@@ -160,14 +160,22 @@ class Database:
                         return str(d["id"])
 
         data = {"source_type": source_type, "title": title, "summary": summary}
-        if source_name: data["source_name"] = source_name
-        if url: data["url"] = url
-        if raw_content: data["raw_content"] = raw_content
-        if content_type: data["content_type"] = content_type
-        if interest_score is not None: data["interest_score"] = interest_score
-        if interest_reason: data["interest_reason"] = interest_reason
-        if language: data["language"] = language
-        if embedding: data["embedding"] = embedding
+        if source_name:
+            data["source_name"] = source_name
+        if url:
+            data["url"] = url
+        if raw_content:
+            data["raw_content"] = raw_content
+        if content_type:
+            data["content_type"] = content_type
+        if interest_score is not None:
+            data["interest_score"] = interest_score
+        if interest_reason:
+            data["interest_reason"] = interest_reason
+        if language:
+            data["language"] = language
+        if embedding:
+            data["embedding"] = embedding
 
         row = await self._insert("discoveries", data)
         return str(row["id"])
@@ -210,16 +218,26 @@ class Database:
             "draft_text": draft_text,
             "language": language,
         }
-        if discovery_id: data["discovery_id"] = discovery_id
-        if posted_text: data["posted_text"] = posted_text
-        if hook_score is not None: data["hook_score"] = hook_score
-        if ai_smell_check_passed is not None: data["ai_smell_check_passed"] = ai_smell_check_passed
-        if x_post_id: data["x_post_id"] = x_post_id
-        if threads_post_id: data["threads_post_id"] = threads_post_id
-        if posted_at: data["posted_at"] = posted_at
-        if override_variant: data["override_variant"] = override_variant
-        if override_ids: data["override_ids"] = override_ids
-        if status: data["status"] = status
+        if discovery_id:
+            data["discovery_id"] = discovery_id
+        if posted_text:
+            data["posted_text"] = posted_text
+        if hook_score is not None:
+            data["hook_score"] = hook_score
+        if ai_smell_check_passed is not None:
+            data["ai_smell_check_passed"] = ai_smell_check_passed
+        if x_post_id:
+            data["x_post_id"] = x_post_id
+        if threads_post_id:
+            data["threads_post_id"] = threads_post_id
+        if posted_at:
+            data["posted_at"] = posted_at
+        if override_variant:
+            data["override_variant"] = override_variant
+        if override_ids:
+            data["override_ids"] = override_ids
+        if status:
+            data["status"] = status
 
         row = await self._insert("posts", data)
         return str(row["id"])
@@ -285,13 +303,20 @@ class Database:
         thread_round: int = 1,
     ) -> str:
         data = {"type": type, "platform": platform}
-        if related_post_id: data["related_post_id"] = related_post_id
-        if thread_id: data["thread_id"] = thread_id
-        if other_user_handle: data["other_user_handle"] = other_user_handle
-        if other_user_text: data["other_user_text"] = other_user_text
-        if my_reply_text: data["my_reply_text"] = my_reply_text
-        if my_reply_x_id: data["my_reply_x_id"] = my_reply_x_id
-        if judged_as: data["judged_as"] = judged_as
+        if related_post_id:
+            data["related_post_id"] = related_post_id
+        if thread_id:
+            data["thread_id"] = thread_id
+        if other_user_handle:
+            data["other_user_handle"] = other_user_handle
+        if other_user_text:
+            data["other_user_text"] = other_user_text
+        if my_reply_text:
+            data["my_reply_text"] = my_reply_text
+        if my_reply_x_id:
+            data["my_reply_x_id"] = my_reply_x_id
+        if judged_as:
+            data["judged_as"] = judged_as
         data["thread_round"] = thread_round
 
         row = await self._insert("interactions", data)
@@ -493,10 +518,14 @@ class Database:
             "source_type": source_type,
             "structured_data": structured_data,
         }
-        if source_id: data["source_id"] = source_id
-        if url: data["url"] = url
-        if title: data["title"] = title
-        if one_liner: data["one_liner"] = one_liner
+        if source_id:
+            data["source_id"] = source_id
+        if url:
+            data["url"] = url
+        if title:
+            data["title"] = title
+        if one_liner:
+            data["one_liner"] = one_liner
         await self._insert("extracts", data)
         return extract_id
 
@@ -537,8 +566,10 @@ class Database:
             "connected_clusters": connected_clusters or [],
             "questions_spawned": questions_spawned or [],
         }
-        if insight: data["insight"] = insight
-        if confidence is not None: data["confidence"] = confidence
+        if insight:
+            data["insight"] = insight
+        if confidence is not None:
+            data["confidence"] = confidence
         await self._insert("connections", data)
 
     async def get_connection_rate(self, source: str, days: int = 7) -> float:
@@ -595,7 +626,8 @@ class Database:
             "publishable": publishable,
             "source_extracts": source_extracts or [],
         }
-        if hook_score is not None: data["hook_score"] = hook_score
+        if hook_score is not None:
+            data["hook_score"] = hook_score
         await self._insert("insights", data)
         return insight_id
 
@@ -604,7 +636,8 @@ class Database:
 
     async def rate_insight(self, insight_id: str, rating: int, comment: str | None = None):
         data = {"human_rating": rating}
-        if comment: data["human_comment"] = comment
+        if comment:
+            data["human_comment"] = comment
         await self._update("insights", {"id": insight_id}, data)
 
     async def get_recent_insights(self, days: int = 7, limit: int = 50) -> list[dict]:
@@ -643,9 +676,12 @@ class Database:
             "priority": priority,
             "status": "pending",
         }
-        if soul_anchor: data["soul_anchor"] = soul_anchor
-        if reasoning: data["reasoning"] = reasoning
-        if parent_insight_id: data["parent_insight_id"] = parent_insight_id
+        if soul_anchor:
+            data["soul_anchor"] = soul_anchor
+        if reasoning:
+            data["reasoning"] = reasoning
+        if parent_insight_id:
+            data["parent_insight_id"] = parent_insight_id
         row = await self._insert("open_questions", data)
         return row.get("id")
 
@@ -743,7 +779,8 @@ class Database:
             "remote_tokens_used": remote_tokens_used,
             "status": status,
         }
-        if notes: data["notes"] = notes
+        if notes:
+            data["notes"] = notes
         await self._update("loop_runs", {"id": run_id}, data)
 
     async def get_today_loop_count(self) -> int:

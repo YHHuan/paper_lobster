@@ -18,7 +18,6 @@ Triggers:
 import os
 import asyncio
 import logging
-from datetime import datetime
 from pathlib import Path
 
 from lobster.explorer.sources.base import OpenQuestion

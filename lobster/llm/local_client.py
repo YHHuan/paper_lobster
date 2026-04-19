@@ -214,16 +214,16 @@ class LocalLLMClient:
             return json.loads(text)
         except json.JSONDecodeError:
             # Try extracting between first { and last }
-            l, r = text.find("{"), text.rfind("}")
-            if l != -1 and r > l:
+            lo, hi = text.find("{"), text.rfind("}")
+            if lo != -1 and hi > lo:
                 try:
-                    return json.loads(text[l : r + 1])
+                    return json.loads(text[lo : hi + 1])
                 except Exception:
                     pass
-            l, r = text.find("["), text.rfind("]")
-            if l != -1 and r > l:
+            lo, hi = text.find("["), text.rfind("]")
+            if lo != -1 and hi > lo:
                 try:
-                    return json.loads(text[l : r + 1])
+                    return json.loads(text[lo : hi + 1])
                 except Exception:
                     pass
             logger.warning(f"[local/{agent}] failed to parse JSON: {text[:200]}")

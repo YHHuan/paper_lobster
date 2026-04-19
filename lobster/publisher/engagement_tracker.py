@@ -5,7 +5,6 @@ and fetches metrics from X and Threads APIs.
 """
 
 import logging
-from datetime import datetime, timedelta
 
 logger = logging.getLogger("lobster.publisher.engagement")
 

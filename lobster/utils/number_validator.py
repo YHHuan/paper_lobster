@@ -29,7 +29,7 @@ def validate_numbers(draft: str, source_text: str) -> tuple[bool, list[str]]:
         list of numbers not found.
     """
     draft_numbers = set(NUMBER_PATTERN.findall(draft))
-    source_numbers = set(NUMBER_PATTERN.findall(source_text))
+    set(NUMBER_PATTERN.findall(source_text))
 
     # Filter out trivially common numbers (1, 2, 3, etc.)
     trivial = {str(i) for i in range(10)}
