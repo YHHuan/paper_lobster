@@ -43,3 +43,9 @@ exclude = ["vendor*", "tests*", "data*"]
 [tool.ruff]
 line-length = 110
 target-version = "py311"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = ["vendor", ".venv", "data", "lobster.egg-info", "build", "dist"]
+python_files = ["test_*.py", "*_test.py"]
+addopts = "-ra"
