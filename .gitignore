@@ -8,3 +8,6 @@ data/*.db
 *.egg-info/
 build/
 dist/
+
+# data-local guard
+data-local/
